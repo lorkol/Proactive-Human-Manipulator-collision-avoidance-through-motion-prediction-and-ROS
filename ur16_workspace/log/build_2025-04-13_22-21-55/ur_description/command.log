@@ -1,0 +1,6 @@
+Invoking command in '/home/nyu6a/ur_ws/build/ur_description': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake /home/nyu6a/ur_ws/src/Universal_Robots_ROS2_Description -DCMAKE_INSTALL_PREFIX=/home/nyu6a/ur_ws/install/ur_description
+Invoked command in '/home/nyu6a/ur_ws/build/ur_description' returned '0': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake /home/nyu6a/ur_ws/src/Universal_Robots_ROS2_Description -DCMAKE_INSTALL_PREFIX=/home/nyu6a/ur_ws/install/ur_description
+Invoking command in '/home/nyu6a/ur_ws/build/ur_description': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --build /home/nyu6a/ur_ws/build/ur_description -- -j32 -l32
+Invoked command in '/home/nyu6a/ur_ws/build/ur_description' returned '0': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --build /home/nyu6a/ur_ws/build/ur_description -- -j32 -l32
+Invoking command in '/home/nyu6a/ur_ws/build/ur_description': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --install /home/nyu6a/ur_ws/build/ur_description
+Invoked command in '/home/nyu6a/ur_ws/build/ur_description' returned '0': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --install /home/nyu6a/ur_ws/build/ur_description
