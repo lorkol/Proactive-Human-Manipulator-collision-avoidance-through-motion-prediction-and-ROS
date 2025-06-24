@@ -1,7 +1,11 @@
 
 # Proactive Human-Manipulator Collision Avoidance
 
-This project presents a **proactive motion planning and safety framework** for industrial robotic manipulators operating in dynamic human-shared environments. The system predicts human skeletal motion and replans robot trajectories in real-time using a GPU-accelerated digital twin, ensuring **safe and intelligent human-robot collaboration**.
+This repository contains the implementation of a real-time, predictive motion planning framework developed for the **UR16e industrial robotic arm** operating in human-shared environments. The goal is to enable **safe and intelligent collaboration** between humans and robots in dynamic workspaces by forecasting human motion and adapting the robot's trajectory accordingly.
+
+The system integrates **3D skeletal pose estimation**, **neural motion prediction**, **Artificial Potential Field (APF) evaluation**, and a **GPU-accelerated A-RRT\*** path planner within a **ROS 2-based digital twin**. All planning and control modules operate in real-time, leveraging sensor fusion and simulation tools to proactively avoid collisions without disrupting the robot’s ongoing tasks.
+
+---
 
 <img src="new.png" alt=" Digital Twin interface for human-aware trajectory
  planning and collision avoidance." width="100%">
