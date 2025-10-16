@@ -1,4 +1,7 @@
 import time
+from typing import List, Dict, Any, Tuple
+from numpy.typing import NDArray
+
 import cv2
 import numpy as np
 import mediapipe as mp
@@ -34,17 +37,17 @@ def on_accel_frame_callback(frame):
     global Ax,Ay, Az
     accel_frame: AccelFrame = frame.as_accel_frame()
     if accel_frame is not None:
-        Ax,Ay,Az=accel_frame.get_x(), accel_frame.get_y(),accel_frame.get_z()
-        Ax,Ay,Az=-Ay,Az,-Ax #imu frame to cam frame
+        Ax, Ay, Az = accel_frame.get_x(), accel_frame.get_y(),accel_frame.get_z()
+        Ax, Ay, Az = -Ay, Az, -Ax #imu frame to cam frame
         
 
-def compute_tilt():
+def compute_tilt() -> NDArray:
     global Ax,Ay,Az
-    L=np.linalg.norm([Ax,Ay,Az])
-    ax,ay,az = Ax/L,Ay/L,Az/L
-    rx=ax
-    ry=az
-    rz=-ay
+    L = np.linalg.norm([Ax,Ay,Az])
+    ax, ay, az = Ax/L, Ay/L, Az/L
+    rx = ax
+    ry = az
+    rz = -ay
     roll = math.atan2(ry,rz) #alpha
     pitch = math.asin(rx)#beta
     
@@ -65,7 +68,7 @@ def compute_tilt():
             
 class TemporalFilter:
     def __init__(self, alpha=0.5):
-        self.alpha = alpha
+        self.alpha: float = alpha
         self.previous_frame = None
 
     def process(self, frame):
@@ -88,7 +91,7 @@ class JointArrayPublisher(Node):
         msg.data = clean_array.flatten().tolist()
         self.publisher.publish(msg)
 
-    def to_point(self, xyz):
+    def to_point(self, xyz: Tuple[float, float, float]) -> Point:
         pt = Point()
         pt.x = xyz[0] / 1000.0
         pt.y = xyz[1] / 1000.0
@@ -123,15 +126,16 @@ class JointArrayPublisher(Node):
             marker_array.markers.append(marker)
 
         # Publish bones (links) as lines
-        connections = [
-            ('CLAV', 'C7'), ('C7', 'LSHO'), ('C7', 'RSHO'),
-            ('LSHO', 'LAEL'), ('LAEL', 'LWPS'),
-            ('RSHO', 'RAEL'), ('RAEL', 'RWPS'),
-            ('C7', 'L3'), ('L3', 'LHIP'), ('L3', 'RHIP'),
-            ('LHIP', 'LKNE'), ('LKNE', 'LHEE'),
-            ('RHIP', 'RKNE'), ('RKNE', 'RHEE')
-        ]
-        name_to_idx = {name: idx for idx, name in enumerate(JOINT_NAMES)}
+        connections: List[Tuple[str, str]] = \
+            [
+                ('CLAV', 'C7'), ('C7', 'LSHO'), ('C7', 'RSHO'),
+                ('LSHO', 'LAEL'), ('LAEL', 'LWPS'),
+                ('RSHO', 'RAEL'), ('RAEL', 'RWPS'),
+                ('C7', 'L3'), ('L3', 'LHIP'), ('L3', 'RHIP'),
+                ('LHIP', 'LKNE'), ('LKNE', 'LHEE'),
+                ('RHIP', 'RKNE'), ('RKNE', 'RHEE')
+            ]
+        name_to_idx: Dict[str, int] = {name: idx for idx, name in enumerate(JOINT_NAMES)}
 
         link_marker = Marker()
         link_marker.header.frame_id = frame_id
@@ -146,10 +150,10 @@ class JointArrayPublisher(Node):
         link_marker.color.b = 0.0
         link_marker.color.a = 1.0
 
-        for joint1, joint2 in connections:
+        for joint1, joint2 in connections: #These are strings from the string tuples
             if joint1 in name_to_idx and joint2 in name_to_idx:
-                p1 = joint_xyz[name_to_idx[joint1]]
-                p2 = joint_xyz[name_to_idx[joint2]]
+                p1: Tuple[float, float, float] = joint_xyz[name_to_idx[joint1]]
+                p2: Tuple[float, float, float] = joint_xyz[name_to_idx[joint2]]
                 if np.allclose(p1, 0) or np.allclose(p2, 0):
                     continue
                 link_marker.points.append(self.to_point(p1))
@@ -159,23 +163,22 @@ class JointArrayPublisher(Node):
         self.marker_pub.publish(marker_array)
 
 
-def deproject_pixel_to_point(u, v, depth, fx, fy, cx, cy,R):
+def deproject_pixel_to_point(u: int, v: int, depth: float, fx: float, fy: float, cx: float, cy: float, R: NDArray)\
+        -> Tuple[float, float, float]:
     """
     Converts 2D pixel (u, v) and depth to 3D real-world coordinates in mm.
     """
     X = (u - cx) * depth / fx
     Z = (cy - v) * depth / fy
     Y = depth
-    # print("depth ", Y)
-    P = np.array([X, Y, Z]) 
+    P = np.array([X, Y, Z])
     P = R@P
-    P[1]-=1000
-    P[2]+=800
-    # return (X, Y, Z)
+    P[1] -= 1000
+    P[2] += 800
     return tuple(P)
 
-def extract_joint_positions(results, depth_data):
-    joint_depths = {}
+def extract_joint_positions(results, depth_data: NDArray) -> Dict[str, Tuple[float, float, float]]:
+    joint_depths: Dict[str, Tuple[float, float, float]] = {}
     fx, fy = 997.117, 996.644
     cx, cy = 644.48, 463.817
 
@@ -184,13 +187,13 @@ def extract_joint_positions(results, depth_data):
 
     lsho = results.pose_landmarks.landmark[mp_pose.PoseLandmark.LEFT_SHOULDER]
     rsho = results.pose_landmarks.landmark[mp_pose.PoseLandmark.RIGHT_SHOULDER]
-    mid_x = (lsho.x + rsho.x) / 2
-    mid_y = (lsho.y + rsho.y) / 2
-    c7_offset = -0.03
-    R = compute_tilt()
+    mid_x: float = (lsho.x + rsho.x) / 2
+    mid_y: float = (lsho.y + rsho.y) / 2
+    c7_offset: float = -0.03
+    R: NDArray = compute_tilt()
     for name, offset in [('CLAV', 0.0), ('C7', c7_offset)]:
-        u = int(mid_x * depth_data.shape[1])
-        v = int((mid_y + offset) * depth_data.shape[0])
+        u: int = int(mid_x * depth_data.shape[1])
+        v: int = int((mid_y + offset) * depth_data.shape[0])
         if 0 <= u < depth_data.shape[1] and 0 <= v < depth_data.shape[0]:
             Z = depth_data[v, u]
             if Z == 0.0:
@@ -199,7 +202,7 @@ def extract_joint_positions(results, depth_data):
                 nonzero = neighborhood[neighborhood != 0]
                 if len(nonzero):
                     Z = np.mean(nonzero)
-            joint_depths[name] = deproject_pixel_to_point(u, v, Z, fx, fy, cx, cy,R)
+            joint_depths[name] = deproject_pixel_to_point(u, v, Z, fx, fy, cx, cy, R)
 
     lhip = results.pose_landmarks.landmark[mp_pose.PoseLandmark.LEFT_HIP]
     rhip = results.pose_landmarks.landmark[mp_pose.PoseLandmark.RIGHT_HIP]
@@ -219,19 +222,19 @@ def extract_joint_positions(results, depth_data):
                 Z = np.mean(nonzero)
         joint_depths['L3'] = deproject_pixel_to_point(u, v, Z, fx, fy, cx, cy,R)
 
-    mp_joints = {
-        'RSHO': mp_pose.PoseLandmark.RIGHT_SHOULDER,
-        'LSHO': mp_pose.PoseLandmark.LEFT_SHOULDER,
-        'LAEL': mp_pose.PoseLandmark.LEFT_ELBOW,
-        'RAEL': mp_pose.PoseLandmark.RIGHT_ELBOW,
-        'LWPS': mp_pose.PoseLandmark.LEFT_WRIST,
-        'RWPS': mp_pose.PoseLandmark.RIGHT_WRIST,
-        'LHIP': mp_pose.PoseLandmark.LEFT_HIP,
-        'RHIP': mp_pose.PoseLandmark.RIGHT_HIP,
-        'LKNE': mp_pose.PoseLandmark.LEFT_KNEE,
-        'RKNE': mp_pose.PoseLandmark.RIGHT_KNEE,
-        'LHEE': mp_pose.PoseLandmark.LEFT_HEEL,
-        'RHEE': mp_pose.PoseLandmark.RIGHT_HEEL
+    mp_joints: Dict[str, int] = {
+            'RSHO': mp_pose.PoseLandmark.RIGHT_SHOULDER,
+            'LSHO': mp_pose.PoseLandmark.LEFT_SHOULDER,
+            'LAEL': mp_pose.PoseLandmark.LEFT_ELBOW,
+            'RAEL': mp_pose.PoseLandmark.RIGHT_ELBOW,
+            'LWPS': mp_pose.PoseLandmark.LEFT_WRIST,
+            'RWPS': mp_pose.PoseLandmark.RIGHT_WRIST,
+            'LHIP': mp_pose.PoseLandmark.LEFT_HIP,
+            'RHIP': mp_pose.PoseLandmark.RIGHT_HIP,
+            'LKNE': mp_pose.PoseLandmark.LEFT_KNEE,
+            'RKNE': mp_pose.PoseLandmark.RIGHT_KNEE,
+            'LHEE': mp_pose.PoseLandmark.LEFT_HEEL,
+            'RHEE': mp_pose.PoseLandmark.RIGHT_HEEL
     }
 
     for name, idx in mp_joints.items():
@@ -273,7 +276,7 @@ def main():
         depth_profile = depth_profiles.get_video_stream_profile(512, 512, OBFormat.Y16, 30)
         config.enable_stream(depth_profile)
         
-        sensor_list:SensorList = device.get_sensor_list()
+        sensor_list: SensorList = device.get_sensor_list()
         accel_sensor = sensor_list.get_sensor_by_type(OBSensorType.ACCEL_SENSOR)
         accel_profile_list: StreamProfileList = accel_sensor.get_stream_profile_list()
         accel_profile: StreamProfile = accel_profile_list.get_stream_profile_by_index(0)
@@ -308,7 +311,7 @@ def main():
         width, height = depth_frame.get_width(), depth_frame.get_height()
         scale = depth_frame.get_depth_scale()
 
-        depth_data = np.frombuffer(depth_frame.get_data(), dtype=np.uint16).reshape((height, width)).astype(np.float32)
+        depth_data: NDArray = np.frombuffer(depth_frame.get_data(), dtype=np.uint16).reshape((height, width)).astype(np.float32)
         depth_data *= scale
         depth_data = np.where((depth_data > MIN_DEPTH) & (depth_data < MAX_DEPTH), depth_data, 0).astype(np.uint16)
     
@@ -317,10 +320,10 @@ def main():
 
         results = pose.process(cv2.cvtColor(color_image, cv2.COLOR_BGR2RGB))
 
-        joint_depths = extract_joint_positions(results, depth_data)
+        joint_depths: Dict[str, Tuple[float, float, float]] = extract_joint_positions(results, depth_data)
         
         
-        joint_xyz = [joint_depths[name] for name in JOINT_NAMES]
+        joint_xyz: List[Any] = [joint_depths[name] for name in JOINT_NAMES]
         
         
         frame_buffer.append(joint_xyz)
