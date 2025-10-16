@@ -32,12 +32,6 @@ global Ax,Ay,Az
 
 def on_accel_frame_callback(frame):
     global Ax,Ay, Az
-    # if frame is None:
-    #     return
-    # global stop_accel
-    # if stop_accel:
-    #     return
-    # with console_lock:
     accel_frame: AccelFrame = frame.as_accel_frame()
     if accel_frame is not None:
         Ax,Ay,Az=accel_frame.get_x(), accel_frame.get_y(),accel_frame.get_z()
@@ -53,8 +47,6 @@ def compute_tilt():
     rz=-ay
     roll = math.atan2(ry,rz) #alpha
     pitch = math.asin(rx)#beta
-    # roll = math.atan2(Ay, Az)
-    # pitch = math.atan2(-ax, math.sqrt(ay**2 + az**2))
     
     Rx = np.array([
         [1, 0, 0],
@@ -84,17 +76,6 @@ class TemporalFilter:
         self.previous_frame = result
         return result
 
-# class JointArrayPublisher(Node):
-#     def __init__(self):
-#         super().__init__('joint_array_publisher')
-#         self.publisher = self.create_publisher(Float32MultiArray, 'joint_array', 10)
-
-#     def publish_joint_array(self, joint_array):
-#         clean_array = np.nan_to_num(joint_array, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
-#         msg = Float32MultiArray()
-#         msg.data = clean_array.flatten().tolist()
-#         self.publisher.publish(msg)
-        
 class JointArrayPublisher(Node):
     def __init__(self):
         super().__init__('joint_array_publisher')
@@ -106,7 +87,6 @@ class JointArrayPublisher(Node):
         msg = Float32MultiArray()
         msg.data = clean_array.flatten().tolist()
         self.publisher.publish(msg)
-        # print("Joint array published")
 
     def to_point(self, xyz):
         pt = Point()
@@ -198,8 +178,6 @@ def extract_joint_positions(results, depth_data):
     joint_depths = {}
     fx, fy = 997.117, 996.644
     cx, cy = 644.48, 463.817
-    # fx, fy = 398.847, 398.658
-    # cx, cy = 257.792, 185.527
 
     if not results.pose_landmarks:
         return joint_depths
@@ -338,17 +316,7 @@ def main():
 
 
         results = pose.process(cv2.cvtColor(color_image, cv2.COLOR_BGR2RGB))
-        
-        # if results.pose_landmarks:
-        #     image_h, image_w = color_image.shape[:2]
-        #     for lm in results.pose_landmarks.landmark:
-        #         # Convert normalized coordinates to pixel positions
-        #         u = int(lm.x * image_w)
-        #         v = int(lm.y * image_h)
 
-        #         # Draw a yellow circle for the joint
-        #         cv2.circle(color_image, (u, v), radius=4, color=(0, 255, 255), thickness=-1)
-    
         joint_depths = extract_joint_positions(results, depth_data)
         
         
