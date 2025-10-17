@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
+from typing import List, Dict, Any
+
 import numpy as np
+from numpy.typing import NDArray
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray
@@ -7,7 +10,8 @@ from rclpy.executors import MultiThreadedExecutor
 from sensor_msgs.msg import JointState
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from builtin_interfaces.msg import Duration
-global pose_seq
+
+pose_seq: NDArray
 
 
 class JointStateReader(Node):
@@ -20,11 +24,11 @@ class JointStateReader(Node):
             10)
 
     def joint_callback(self, msg):
-        joint_positions = dict(zip(msg.name, msg.position))
+        joint_positions: Dict[str, Any] = dict(zip(msg.name, msg.position))
         self.get_logger().info(f"Joint Positions: {joint_positions}")
 
+
 class PoseListener(Node):
-    
     def __init__(self):
         super().__init__('pose_listener')
         self.subscription = self.create_subscription(
@@ -33,14 +37,14 @@ class PoseListener(Node):
             self.listener_callback,
             10
         )
+
     def listener_callback(self, msg):
         global pose_seq
         NUM_FRAMES = 1
         NUM_JOINTS = 15
         DIMENSIONS = 3
         pose_seq = np.array(msg.data).reshape((NUM_FRAMES, NUM_JOINTS, DIMENSIONS))
-        
-        
+
         
 class UR10TrajectoryPublisher(Node):
     def __init__(self):
@@ -52,12 +56,8 @@ class UR10TrajectoryPublisher(Node):
         )
         self.timer = self.create_timer(0.5, self.timer_callback)
         self.step = 0
-        
-    
-        
-        
+
     def send_trajectory(self, positions, duration_sec):
-        
         traj = JointTrajectory()
         traj.joint_names = [
             'shoulder_pan_joint',
@@ -76,19 +76,18 @@ class UR10TrajectoryPublisher(Node):
     global config
     global target_coords
     config = []
+
     def timer_callback(self):
-        
         global pose_seq,config, target_coords
         
         pick = np.array([0, -np.pi/4, np.pi/2, -np.pi/2, np.pi/4, 0])
-        place = np.array([-1.5, -np.pi/4, np.pi/2, -np.pi/2, np.pi/4, 0])
+        place: NDArray = np.array([-1.5, -np.pi/4, np.pi/2, -np.pi/2, np.pi/4, 0])
         target_coords = forward_kinematics(place)
         if len(config)==0:
             config = pick.copy()
         goal = place
         print("pose_seq_loop",pose_seq)
-        
-    
+
         path = a_rrt_star(config, goal, pose_seq, iterations=5)
         
         print("path",list(path))
@@ -113,7 +112,7 @@ dh_params = [
     [0,       0,        0.11655,  0]
 ]
 
-def dh_transform(theta, a, d, alpha):
+def dh_transform(theta: float, a: float, d: float, alpha: float):
     return np.array([
         [np.cos(theta), -np.sin(theta)*np.cos(alpha),  np.sin(theta)*np.sin(alpha), a*np.cos(theta)],
         [np.sin(theta),  np.cos(theta)*np.cos(alpha), -np.cos(theta)*np.sin(alpha), a*np.sin(theta)],
@@ -121,18 +120,18 @@ def dh_transform(theta, a, d, alpha):
         [0,              0,                            0,                           1]
     ])
 
-def forward_kinematics(joint_angles):
-    T = np.eye(4)
-    positions = []
+def forward_kinematics(joint_angles: NDArray) -> NDArray:
+    T: NDArray = np.eye(4)
+    positions: List[NDArray] = []
     for i in range(6):
-        theta = joint_angles[i] + dh_params[i][0]
+        theta: float = joint_angles[i] + dh_params[i][0]
         a, d, alpha = dh_params[i][1:]
         A = dh_transform(theta, a, d, alpha)
         T = T @ A
         positions.append(T[:3, 3])
     return np.array(positions)
 
-def get_full_link_points(joint_positions, num_points=5):
+def get_full_link_points(joint_positions: NDArray, num_points=5) -> NDArray:
     link_points = []
     for i in range(len(joint_positions) - 1):
         start, end = joint_positions[i], joint_positions[i + 1]
@@ -142,7 +141,7 @@ def get_full_link_points(joint_positions, num_points=5):
     return np.array(link_points)
 
 # -------------------- Potential Field --------------------
-def potential(pt, link_params, scale, dth=5):
+def potential(pt, link_params, scale, dth=5) -> float:
     pt = pt * 5
     p1, p2, rad = link_params
     axis = p2 - p1
@@ -155,7 +154,7 @@ def potential(pt, link_params, scale, dth=5):
         return 500 * scale
     elif radial < dth and min(abs(axial), abs(axial1)) < dth:
         return 100 * scale
-    return 0
+    return 0.
 
 def extract_links(pose):
     links = []
@@ -172,11 +171,11 @@ def extract_links(pose):
         links.append([pose[link[0]], pose[link[1]], link[2]])
     return links
 
-def compute_APF(pose_seq, coords,target):
+def compute_APF(pose_seq, coords, target) -> NDArray:
     p_curr = pose_seq[-1]
     p_pred = p_curr + np.random.randn(*p_curr.shape) * 20
-    poses = [(p_curr / 10) + 100, (p_pred / 10) + 100]
-    potentials = np.zeros(len(coords))
+    poses: List = [(p_curr / 10) + 100, (p_pred / 10) + 100]
+    potentials: NDArray = np.zeros(len(coords))
     for p_no, P in enumerate(poses):
         links = extract_links(P)
         for i, pt in enumerate(coords):
@@ -215,7 +214,7 @@ def a_rrt_star(start_q, goal_q, pose_seq, iterations=100):
         full_link_points = get_full_link_points(forward_kinematics(q))
         return compute_total_apf(full_link_points, pose_seq) < 300
 
-    nodes = [Node(start_q)]
+    nodes: List[Node] = [Node(start_q)]
     for _ in range(iterations):
         rand_q = np.random.uniform(-np.pi, np.pi, size=6)
         nearest = min(nodes, key=lambda n: heuristic(n.q, rand_q, pose_seq))
@@ -232,13 +231,11 @@ def a_rrt_star(start_q, goal_q, pose_seq, iterations=100):
                 break
 
     path = []
-    current = nodes[-1]
+    current: Node = nodes[-1]
     while current:
         path.append(current.q)
         current = current.parent
     return path[::-1] if len(path) > 1 else [start_q]
-
-
 
 
 def main(args=None):
