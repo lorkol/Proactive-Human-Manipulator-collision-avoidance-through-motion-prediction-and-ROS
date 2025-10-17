@@ -78,7 +78,7 @@ class UR10TrajectoryPublisher(Node):
     def timer_callback(self):
         global pose_seq
 
-        pick = np.array([0, -np.pi / 4, np.pi / 2, -np.pi / 2, np.pi / 4, 0])
+        pick: NDArray = np.array([0, -np.pi / 4, np.pi / 2, -np.pi / 2, np.pi / 4, 0])
         place: NDArray = np.array([-1.5, -np.pi / 4, np.pi / 2, -np.pi / 2, np.pi / 4, 0])
         self.target_coords = forward_kinematics(place)
         if len(self.config) == 0:
@@ -111,7 +111,7 @@ dh_params = [
 ]
 
 
-def dh_transform(theta: float, a: float, d: float, alpha: float):
+def dh_transform(theta: float, a: float, d: float, alpha: float) -> NDArray:
     return np.array([
         [np.cos(theta), -np.sin(theta)*np.cos(alpha),  np.sin(theta)*np.sin(alpha), a*np.cos(theta)],
         [np.sin(theta),  np.cos(theta)*np.cos(alpha), -np.cos(theta)*np.sin(alpha), a*np.sin(theta)],
@@ -133,7 +133,7 @@ def forward_kinematics(joint_angles: NDArray) -> NDArray:
 
 
 def get_full_link_points(joint_positions: NDArray, num_points=5) -> NDArray:
-    link_points = []
+    link_points: List[NDArray] = []
     for i in range(len(joint_positions) - 1):
         start, end = joint_positions[i], joint_positions[i + 1]
         for t in np.linspace(0, 1, num_points):
