@@ -54,6 +54,7 @@ class UR10TrajectoryPublisher(Node):
             '/joint_trajectory_controller/joint_trajectory',
             10
         )
+        self.config: List[float] = []
         self.timer = self.create_timer(0.5, self.timer_callback)
         self.step = 0
 
@@ -78,13 +79,13 @@ class UR10TrajectoryPublisher(Node):
     config = []
 
     def timer_callback(self):
-        global pose_seq,config, target_coords
-        
-        pick = np.array([0, -np.pi/4, np.pi/2, -np.pi/2, np.pi/4, 0])
-        place: NDArray = np.array([-1.5, -np.pi/4, np.pi/2, -np.pi/2, np.pi/4, 0])
         target_coords = forward_kinematics(place)
-        if len(config)==0:
-            config = pick.copy()
+        global pose_seq, target_coords
+
+        pick = np.array([0, -np.pi / 4, np.pi / 2, -np.pi / 2, np.pi / 4, 0])
+        place: NDArray = np.array([-1.5, -np.pi / 4, np.pi / 2, -np.pi / 2, np.pi / 4, 0])
+        if len(self.config) == 0:
+            self.config = pick.copy()
         goal = place
         print("pose_seq_loop",pose_seq)
 
@@ -92,10 +93,10 @@ class UR10TrajectoryPublisher(Node):
         
         print("path",list(path))
         tbsent = path[0]
-        if len(path)>1:
+        if len(path) > 1:
             tbsent = path[1]
         self.send_trajectory(list(tbsent), 10000000)
-        config = list(tbsent.copy())
+        self.config = list(tbsent.copy())
 
 ################################################
 ################################################
@@ -112,6 +113,7 @@ dh_params = [
     [0,       0,        0.11655,  0]
 ]
 
+
 def dh_transform(theta: float, a: float, d: float, alpha: float):
     return np.array([
         [np.cos(theta), -np.sin(theta)*np.cos(alpha),  np.sin(theta)*np.sin(alpha), a*np.cos(theta)],
@@ -119,6 +121,7 @@ def dh_transform(theta: float, a: float, d: float, alpha: float):
         [0,              np.sin(alpha),                np.cos(alpha),               d],
         [0,              0,                            0,                           1]
     ])
+
 
 def forward_kinematics(joint_angles: NDArray) -> NDArray:
     T: NDArray = np.eye(4)
@@ -140,6 +143,7 @@ def get_full_link_points(joint_positions: NDArray, num_points=5) -> NDArray:
             link_points.append(interp_pt)
     return np.array(link_points)
 
+
 # -------------------- Potential Field --------------------
 def potential(pt, link_params, scale, dth=5) -> float:
     pt = pt * 5
@@ -149,12 +153,13 @@ def potential(pt, link_params, scale, dth=5) -> float:
     vec = pt - p1
     axial = np.dot(axis, vec) / cyl_len
     axial1 = np.dot(axis, pt - p2) / cyl_len
-    radial = np.sqrt(np.linalg.norm(vec)**2 - axial**2) if np.linalg.norm(vec) > 0 else 0
+    radial = np.sqrt(np.linalg.norm(vec) ** 2 - axial ** 2) if np.linalg.norm(vec) > 0 else 0
     if np.sign(axial) > 0 and abs(axial) < cyl_len and radial < rad:
         return 500 * scale
     elif radial < dth and min(abs(axial), abs(axial1)) < dth:
         return 100 * scale
     return 0.
+
 
 def extract_links(pose):
     links = []
@@ -165,13 +170,14 @@ def extract_links(pose):
     bc = (pose[0] + pose[1]) / 2
     tc = bc + 2 * (pose[1] - pose[8]) * rad / (3 * np.linalg.norm(pose[1] - pose[8]))
     links.append([tc, bc, rad / 3])
-    joint_idx_map = [[3, 4, rad/6], [4, 6, rad/6], [2, 5, rad/6], [5, 7, rad/6],
-                     [9, 11, rad/2], [10, 12, rad/2], [11, 13, rad/2], [12, 14, rad/2]]
+    joint_idx_map = [[3, 4, rad / 6], [4, 6, rad / 6], [2, 5, rad / 6], [5, 7, rad / 6],
+                     [9, 11, rad / 2], [10, 12, rad / 2], [11, 13, rad / 2], [12, 14, rad / 2]]
     for link in joint_idx_map:
         links.append([pose[link[0]], pose[link[1]], link[2]])
     return links
 
 def compute_APF(pose_seq, coords, target) -> NDArray:
+
     p_curr = pose_seq[-1]
     p_pred = p_curr + np.random.randn(*p_curr.shape) * 20
     poses: List = [(p_curr / 10) + 100, (p_pred / 10) + 100]
@@ -179,13 +185,14 @@ def compute_APF(pose_seq, coords, target) -> NDArray:
     for p_no, P in enumerate(poses):
         links = extract_links(P)
         for i, pt in enumerate(coords):
-            #repulsive potential
+            # repulsive potential
             for link in links:
                 potentials[i] += potential(pt, link, 1 / (1 + p_no))
-            
-            #attractive potential
             potentials[i]-=7500/(np.linalg.norm(target-pt)+1)
+
+            # attractive potential
     return potentials
+
 
 # -------------------- Heuristic & A-RRT* --------------------
 def compute_total_apf(link_points, pose_seq):
@@ -199,6 +206,7 @@ def heuristic(qs, qe, pose_seq, epsilon=2.0):
     return (P_e - P_s + 1) / np.exp(epsilon * (1 - P_max / 3000))
 
 def a_rrt_star(start_q, goal_q, pose_seq, iterations=100):
+
     class Node:
         def __init__(self, q):
             self.q = q
@@ -254,6 +262,7 @@ def main(args=None):
         joint_reader.destroy_node()
         trajectory_publisher.destroy_node()
         rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()
