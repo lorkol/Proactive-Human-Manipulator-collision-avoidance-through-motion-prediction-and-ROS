@@ -37,7 +37,7 @@ The system integrates **3D skeletal pose estimation**, **neural motion predictio
 
 ## Technologies Used
 
-- **ROS 2 (Foxy)** for real-time communication
+- **ROS 2 (Humble)** for real-time communication
 - **Gazebo** + **RViz** for simulation & visualization
 - **Python**, **CuPy** for GPU acceleration
 - **MediaPipe** for real-time human skeleton tracking
