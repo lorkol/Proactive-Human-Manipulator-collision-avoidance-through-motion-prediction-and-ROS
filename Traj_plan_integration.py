@@ -45,7 +45,6 @@ class PoseListener(Node):
         DIMENSIONS = 3
         pose_seq = np.array(msg.data).reshape((NUM_FRAMES, NUM_JOINTS, DIMENSIONS))
 
-        
 class UR10TrajectoryPublisher(Node):
     def __init__(self):
         super().__init__('ur10_pick_place_loop')
@@ -55,6 +54,7 @@ class UR10TrajectoryPublisher(Node):
             10
         )
         self.config: List[float] = []
+        self.target_coords: NDArray = np.array([0, 0, 0])
         self.timer = self.create_timer(0.5, self.timer_callback)
         self.step = 0
 
@@ -74,24 +74,21 @@ class UR10TrajectoryPublisher(Node):
         traj.points.append(point)
         self.publisher_.publish(traj)
         self.get_logger().info(f'Published trajectory {positions}')
-    global config
-    global target_coords
-    config = []
 
     def timer_callback(self):
-        target_coords = forward_kinematics(place)
-        global pose_seq, target_coords
+        global pose_seq
 
         pick = np.array([0, -np.pi / 4, np.pi / 2, -np.pi / 2, np.pi / 4, 0])
         place: NDArray = np.array([-1.5, -np.pi / 4, np.pi / 2, -np.pi / 2, np.pi / 4, 0])
+        self.target_coords = forward_kinematics(place)
         if len(self.config) == 0:
             self.config = pick.copy()
         goal = place
         print("pose_seq_loop",pose_seq)
 
-        path = a_rrt_star(config, goal, pose_seq, iterations=5)
-        
-        print("path",list(path))
+        path = a_rrt_star(self.config, goal, pose_seq, self.target_coords, iterations=5)
+
+        print("path", list(path))
         tbsent = path[0]
         if len(path) > 1:
             tbsent = path[1]
@@ -133,6 +130,7 @@ def forward_kinematics(joint_angles: NDArray) -> NDArray:
         T = T @ A
         positions.append(T[:3, 3])
     return np.array(positions)
+
 
 def get_full_link_points(joint_positions: NDArray, num_points=5) -> NDArray:
     link_points = []
@@ -176,8 +174,8 @@ def extract_links(pose):
         links.append([pose[link[0]], pose[link[1]], link[2]])
     return links
 
-def compute_APF(pose_seq, coords, target) -> NDArray:
 
+def compute_APF(pose_seq, coords, target_coords) -> NDArray:
     p_curr = pose_seq[-1]
     p_pred = p_curr + np.random.randn(*p_curr.shape) * 20
     poses: List = [(p_curr / 10) + 100, (p_pred / 10) + 100]
@@ -188,25 +186,25 @@ def compute_APF(pose_seq, coords, target) -> NDArray:
             # repulsive potential
             for link in links:
                 potentials[i] += potential(pt, link, 1 / (1 + p_no))
-            potentials[i]-=7500/(np.linalg.norm(target-pt)+1)
 
             # attractive potential
+            potentials[i] -= 7500 / (np.linalg.norm(target_coords - pt) + 1)
     return potentials
 
 
 # -------------------- Heuristic & A-RRT* --------------------
-def compute_total_apf(link_points, pose_seq):
-    global target_coords
-    return np.sum(compute_APF(pose_seq, link_points,target_coords))
+def compute_total_apf(link_points, pose_seq, target_coords):
+    return np.sum(compute_APF(pose_seq, link_points, target_coords))
 
-def heuristic(qs, qe, pose_seq, epsilon=2.0):
-    P_s = compute_total_apf(get_full_link_points(forward_kinematics(qs)), pose_seq)
-    P_e = compute_total_apf(get_full_link_points(forward_kinematics(qe)), pose_seq)
+
+def heuristic(qs, qe, pose_seq, target_coords, epsilon=2.0):
+    P_s = compute_total_apf(get_full_link_points(forward_kinematics(qs)), pose_seq, target_coords)
+    P_e = compute_total_apf(get_full_link_points(forward_kinematics(qe)), pose_seq, target_coords)
     P_max = max(P_s, P_e)
     return (P_e - P_s + 1) / np.exp(epsilon * (1 - P_max / 3000))
 
-def a_rrt_star(start_q, goal_q, pose_seq, iterations=100):
 
+def a_rrt_star(start_q, goal_q, pose_seq, target_coords, iterations=100):
     class Node:
         def __init__(self, q):
             self.q = q
@@ -220,12 +218,12 @@ def a_rrt_star(start_q, goal_q, pose_seq, iterations=100):
 
     def is_safe(q):
         full_link_points = get_full_link_points(forward_kinematics(q))
-        return compute_total_apf(full_link_points, pose_seq) < 300
+        return compute_total_apf(full_link_points, pose_seq, target_coords) < 300
 
     nodes: List[Node] = [Node(start_q)]
     for _ in range(iterations):
         rand_q = np.random.uniform(-np.pi, np.pi, size=6)
-        nearest = min(nodes, key=lambda n: heuristic(n.q, rand_q, pose_seq))
+        nearest = min(nodes, key=lambda n: heuristic(n.q, rand_q, pose_seq, target_coords))
         new_q = steer(nearest.q, rand_q)
         if is_safe(new_q):
             new_node = Node(new_q)
