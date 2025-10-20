@@ -5,7 +5,7 @@ from numpy.typing import NDArray
 import cv2
 import numpy as np
 import mediapipe as mp
-from pyorbbecsdk import Config, OBSensorType, OBFormat, Pipeline, OBAlignMode
+from pyorbbecsdk import Config, OBSensorType, OBFormat, Pipeline, OBAlignMode, AccelFrame, SensorList, StreamProfileList, StreamProfile
 from utils import frame_to_bgr_image
 import math
 
