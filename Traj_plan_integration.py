@@ -12,6 +12,7 @@ from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from builtin_interfaces.msg import Duration
 
 pose_seq: NDArray
+destination: NDArray
 
 
 class JointStateReader(Node):
@@ -23,9 +24,23 @@ class JointStateReader(Node):
             self.joint_callback,
             10)
 
-    def joint_callback(self, msg):
+    def joint_callback(self, msg: JointState):
         joint_positions: Dict[str, Any] = dict(zip(msg.name, msg.position))
         self.get_logger().info(f"Joint Positions: {joint_positions}")
+
+class DestinationListener(Node):
+    def __init__(self):
+        super().__init__('destination_listener')
+        self.subscription = self.create_subscription(
+            JointTrajectoryPoint,
+            '/joint_destination',
+            self.listener_callback,
+            10)
+
+    def listener_callback(self, msg: JointTrajectoryPoint):
+        global destination
+        destination: np.ndarray = np.array(msg.positions)
+        print(f"Trajectory Planner: Got new Destination: {self.destination}")
 
 
 class PoseListener(Node):
@@ -45,7 +60,7 @@ class PoseListener(Node):
         DIMENSIONS = 3
         pose_seq = np.array(msg.data).reshape((NUM_FRAMES, NUM_JOINTS, DIMENSIONS))
 
-class UR10TrajectoryPublisher(Node):
+class UR16TrajectoryPublisher(Node):
     def __init__(self):
         super().__init__('ur10_pick_place_loop')
         self.publisher_ = self.create_publisher(
@@ -76,17 +91,14 @@ class UR10TrajectoryPublisher(Node):
         self.get_logger().info(f'Published trajectory {positions}')
 
     def timer_callback(self):
-        global pose_seq
+        global pose_seq, destination
 
-        pick: NDArray = np.array([0, -np.pi / 4, np.pi / 2, -np.pi / 2, np.pi / 4, 0])
-        place: NDArray = np.array([-1.5, -np.pi / 4, np.pi / 2, -np.pi / 2, np.pi / 4, 0])
-        self.target_coords = forward_kinematics(place)
+        self.target_coords = forward_kinematics(destination)
         if len(self.config) == 0:
-            self.config = pick.copy()
-        goal = place
+            self.config = pose_seq.copy()
         print("pose_seq_loop",pose_seq)
 
-        path = a_rrt_star(self.config, goal, pose_seq, self.target_coords, iterations=5)
+        path = a_rrt_star(self.config, destination, pose_seq, self.target_coords, iterations=5)
 
         print("ARRT* Timer Callback path: ", list(path))
         tbsent = path[0]
@@ -247,10 +259,12 @@ def a_rrt_star(start_q, goal_q, pose_seq, target_coords, iterations=100):
 def main(args=None):
     rclpy.init(args=args)
 
+    destination_listener = DestinationListener()
     joint_reader = PoseListener()
-    trajectory_publisher = UR10TrajectoryPublisher()
+    trajectory_publisher = UR16TrajectoryPublisher()
 
     executor = MultiThreadedExecutor()
+    executor.add_node(destination_listener)
     executor.add_node(joint_reader)
     executor.add_node(trajectory_publisher)
 
