@@ -88,7 +88,7 @@ class UR10TrajectoryPublisher(Node):
 
         path = a_rrt_star(self.config, goal, pose_seq, self.target_coords, iterations=5)
 
-        print("path", list(path))
+        print("ARRT* Timer Callback path: ", list(path))
         tbsent = path[0]
         if len(path) > 1:
             tbsent = path[1]

@@ -4,27 +4,32 @@ import numpy as np
 # --- 1. CONFIGURATION ---
 JOINT_NAMES = ['CLAV', 'C7', 'RSHO', 'LSHO', 'LAEL', 'RAEL', 'LWPS', 'RWPS',
                'L3', 'LHIP', 'RHIP', 'LKNE', 'RKNE', 'LHEE', 'RHEE']
+               
+# BASE_Y_OFFSET_MM: Sets the human's average distance from the robot base (Y=0).
+# A tighter clearance of -300mm to -500mm ensures the robot's arm moving from 
+# Q1=(0.0, -1.0, 1.0, ...) to Q2=(-2.0, -1.0, 1.0, ...) will pass close by.
+BASE_Y_OFFSET_MM = -200 
+
 # Approximate standing pose (mm)
 # Assuming Z is UP, X is lateral (left/right), Y is forward/depth (robot is at (0,0,0))
-# Human starts at Y=-1000 (1 meter in front of the robot base)
-INITIAL_POSE = np.array([
-    [0, 0, 1550],  # CLAV (0)
-    [0, 0, 1600],  # C7 (1)
-    [200, 0, 1400],  # RSHO (2)
-    [-200, 0, 1400],  # LSHO (3)
-    [250, 0, 1100],  # LAEL (4)
-    [-250, 0, 1100],  # RAEL (5)
-    [250, 0, 800],  # LWPS (6)
-    [-250, 0, 800],  # RWPS (7)
-    [0, 0, 1200],  # L3 (8) - interpolated spine
-    [100, 0, 950],  # LHIP (9)
-    [-100, 0, 950],  # RHIP (10)
-    [100, 0, 450],  # LKNE (11)
-    [-100, 0, 450],  # RKNE (12)
-    [100, 0, 0],  # LHEE (13)
-    [-100, 0, 0]  # RHEE (14)
-])
-
+# The INITIAL_POSE now defines a person standing at the tight BASE_Y_OFFSET_MM distance.
+INITIAL_POSE_STAND = np.array([
+    [0, BASE_Y_OFFSET_MM, 1550],  # CLAV (0)
+    [0, BASE_Y_OFFSET_MM, 1600],  # C7 (1)
+    [200, BASE_Y_OFFSET_MM, 1400],  # RSHO (2)
+    [-200, BASE_Y_OFFSET_MM, 1400],  # LSHO (3)
+    [250, BASE_Y_OFFSET_MM, 1100],  # LAEL (4)
+    [-250, BASE_Y_OFFSET_MM, 1100], # RAEL (5)
+    [250, BASE_Y_OFFSET_MM, 800],  # LWPS (6)
+    [-250, BASE_Y_OFFSET_MM, 800], # RWPS (7)
+    [0, BASE_Y_OFFSET_MM, 1200],  # L3 (8) - interpolated spine
+    [100, BASE_Y_OFFSET_MM, 950],  # LHIP (9)
+    [-100, BASE_Y_OFFSET_MM, 950], # RHIP (10)
+    [100, BASE_Y_OFFSET_MM, 450],  # LKNE (11)
+    [-100, BASE_Y_OFFSET_MM, 450], # RKNE (12)
+    [100, BASE_Y_OFFSET_MM, 0],    # LHEE (13)
+    [-100, BASE_Y_OFFSET_MM, 0]    # RHEE (14)
+], dtype=np.float64) # **CRITICAL FIX: Ensure float type to avoid casting error**
 
 # --- 2. CORE UTILITY FUNCTIONS ---
 def generate_trajectory(start_pose, frames, duration, motion_func):
@@ -33,135 +38,129 @@ def generate_trajectory(start_pose, frames, duration, motion_func):
     time_steps = np.linspace(0, duration, frames)
     for t in time_steps:
         new_pose = motion_func(start_pose, t, duration)
+        # Convert pose back to the list format for JSON export
         trajectory.append({
             "time_s": float(t),
             "joint_poses_mm": new_pose.round(3).tolist()
         })
     return trajectory
 
-
 # --- 3. SCENARIO MOTION FUNCTIONS (1-3) ---
 
 # S1: Simple Passing (Translate the entire body)
-def motion_pass_by(pose, t, duration, start_x=-1500, end_x=1500, y_offset=-1000):
+def motion_pass_by(pose, t, duration, start_x=-1500, end_x=1500, y_offset=BASE_Y_OFFSET_MM):
     progress = t / duration
     current_x = start_x + (end_x - start_x) * progress
-    # Base pose translation
-    translated_pose = pose + np.array([current_x, y_offset, 0])
-    # Slight dynamic step (simulated by lifting one knee/heel)
+    
+    # We use a base pose near the robot, then shift it sideways (X-axis)
+    translated_pose = pose.copy()
+    translated_pose[:, 0] += current_x # Shift X
+    translated_pose[:, 1] = y_offset # Set Y (depth) to ensure collision risk
+    
+    # Simple leg animation
     if (progress * 10) % 2 < 1:
         translated_pose[[11, 13], 2] += 20 * np.sin(progress * np.pi * 5)
     return translated_pose
 
-
 # S2: Reach/Intrusion (Translate a single hand relative to the shoulder/C7)
-def motion_reach(pose, t, duration, joint_idx, start_z_mm=800, end_z_mm=400, y_intrude=200):
-    if t < duration * 0.2:  # Wait period
-        return pose + np.array([0, -1000, 0])
+def motion_reach(pose, t, duration, joint_idx, intrude_y_mm=200):
+    if t < duration * 0.2: # Wait period
+        return pose # Static pose close to the robot
+        
     progress = (t - duration * 0.2) / (duration * 0.8)
-
-    # Intrusion is only applied to the specified joint (e.g., WRIST)
     intruding_pose = pose.copy()
-
-    # Interpolate Z and Y position (forward and down to reach)
-    current_z = start_z_mm + (end_z_mm - start_z_mm) * progress
-    current_y = 0 + y_intrude * progress
-
-    # Calculate shoulder position (e.g., RSHO) for relative movement
-    shoulder_idx = joint_idx - 5 if joint_idx == 7 else joint_idx - 4
-
-    # Set the new position for the wrist
-    target_pos = intruding_pose[shoulder_idx].copy()
-    target_pos[2] = current_z
-    target_pos[1] += current_y  # Intrusion in Y (depth)
-
-    intruding_pose[joint_idx] = target_pos
-
-    # Base pose translation (human is standing)
-    return intruding_pose + np.array([0, -1000, 0])
-
+    
+    # Y-axis is the intrusion direction (towards the robot, Y=0)
+    current_y_delta = intrude_y_mm * progress 
+    
+    # Intrusion is only applied to the specified joint (e.g., WRIST)
+    # The wrist's initial Y position (pose[joint_idx, 1]) is already BASE_Y_OFFSET_MM
+    # We move the wrist from BASE_Y_OFFSET_MM towards BASE_Y_OFFSET_MM + current_y_delta
+    # Since BASE_Y_OFFSET_MM is negative, moving towards zero is positive delta
+    intruding_pose[joint_idx, 1] += current_y_delta
+    
+    # Keep the rest of the arm attached by moving Elbow/Shoulder slightly
+    if joint_idx in [6, 7]: # LWPS or RWPS
+        shoulder_idx = joint_idx - 4
+        intruding_pose[shoulder_idx, 1] += current_y_delta * 0.3 # Shoulder moves 30%
+        
+    return intruding_pose
 
 # S3: Prolonged Interaction (Shift torso/hips)
-def motion_lean_in(pose, t, duration, max_lean_mm=150):
+def motion_lean_in(pose, t, duration, max_lean_mm=BASE_Y_OFFSET_MM + 200):
     progress = t / duration
-    current_lean_y = max_lean_mm * np.sin(progress * np.pi)
-
-    # Cast to float64 before performing addition with the float value
-    # Apply lean (Y-axis translation) to all upper body joints (above waist)
-    lean_pose = pose.astype(np.float64).copy() + np.array([0, -1000, 0], dtype=np.float64)
-    # lean_pose = pose.copy() + np.array([0, -1000, 0])  # Base pos
-
-    # Apply lean only to the upper body joints (0 to 8)
-    lean_pose[:9, 1] += current_lean_y
-
-    # Shift hips slightly as well
-    lean_pose[[9, 10], 1] += current_lean_y * 0.5
-
+    # This creates a slow, sustained lean toward the robot's working volume (Y=0)
+    current_lean_y = max_lean_mm * np.sin(progress * np.pi) 
+    
+    lean_pose = pose.copy() 
+    
+    # Apply lean (Y-axis translation) to all upper body joints (above hips, 0 to 10)
+    lean_pose[:11, 1] += current_lean_y
+    
     return lean_pose
-
 
 # --- 4. GENERATE 50 TRAJECTORIES ---
 all_trajectories = []
 total_count = 0
+# Use the adjusted stand pose as the base for all movements
+INITIAL_POSE = INITIAL_POSE_STAND 
 
-# S1: Simple Passing (20 trajectories)
-for i in range(10):  # 10 Fast (3s)
+# S1: Simple Passing (20 trajectories) - These are mostly for testing collision *detection*
+for i in range(10): # 10 Fast (3s)
     total_count += 1
     all_trajectories.append({
         "scenario_id": f"S1-{total_count}-Fast",
-        "description": f"Fast walk-by (3s) at medium clearance (Y={-1000}mm).",
+        "description": f"Fast walk-by (3s) at close clearance (Y={BASE_Y_OFFSET_MM}mm).",
         "trajectory_data": generate_trajectory(INITIAL_POSE, 30, 3.0, motion_pass_by)
     })
-for i in range(10):  # 10 Slow (6s)
+for i in range(10): # 10 Slow (6s)
     total_count += 1
     all_trajectories.append({
         "scenario_id": f"S1-{total_count}-Slow",
-        "description": f"Slow walk-by (6s) at close clearance (Y={-800}mm).",
-        "trajectory_data": generate_trajectory(INITIAL_POSE, 60, 6.0,
-                                               lambda p, t, d: motion_pass_by(p, t, d, y_offset=-800))
+        "description": f"Slow walk-by (6s) at very tight clearance (Y={BASE_Y_OFFSET_MM + 150}mm).",
+        "trajectory_data": generate_trajectory(INITIAL_POSE, 60, 6.0, 
+                                               lambda p, t, d: motion_pass_by(p, t, d, y_offset=BASE_Y_OFFSET_MM + 150))
     })
 
-# S2: Reach/Intrusion (15 trajectories)
-for i in range(5):  # Right Wrist Intrusion
+# S2: Reach/Intrusion (15 trajectories) - Focus on the arm
+for i in range(5): # Right Wrist Intrusion
     total_count += 1
     all_trajectories.append({
         "scenario_id": f"S2-{total_count}-R_Reach",
-        "description": "Right wrist intrusion (RWPS, index 7) reaching forward 200mm (Y intrusion).",
-        "trajectory_data": generate_trajectory(INITIAL_POSE, 40, 4.0,
-                                               lambda p, t, d: motion_reach(p, t, d, joint_idx=7, y_intrude=200))
+        "description": "Right wrist intrusion (RWPS, index 7) reaching 200mm towards the robot.",
+        "trajectory_data": generate_trajectory(INITIAL_POSE, 40, 4.0, 
+                                               lambda p, t, d: motion_reach(p, t, d, joint_idx=7, intrude_y_mm=200))
     })
-for i in range(5):  # Left Wrist Intrusion
+for i in range(5): # Left Wrist Intrusion
     total_count += 1
     all_trajectories.append({
         "scenario_id": f"S2-{total_count}-L_Reach",
-        "description": "Left wrist intrusion (LWPS, index 6) reaching forward 300mm (Y intrusion).",
-        "trajectory_data": generate_trajectory(INITIAL_POSE, 40, 4.0,
-                                               lambda p, t, d: motion_reach(p, t, d, joint_idx=6, y_intrude=300))
+        "description": "Left wrist intrusion (LWPS, index 6) reaching 300mm towards the robot.",
+        "trajectory_data": generate_trajectory(INITIAL_POSE, 40, 4.0, 
+                                               lambda p, t, d: motion_reach(p, t, d, joint_idx=6, intrude_y_mm=300))
     })
-for i in range(5):  # Two-Hand Reach (use a combined motion)
+for i in range(5): # Two-Hand Reach
     total_count += 1
-
-
     def two_hand_motion(pose, t, d):
-        p1 = motion_reach(pose, t, d, joint_idx=6, y_intrude=200)
-        return motion_reach(p1, t, d, joint_idx=7, y_intrude=200)
-
-
+        p1 = motion_reach(pose, t, d, joint_idx=6, intrude_y_mm=200)
+        return motion_reach(p1, t, d, joint_idx=7, intrude_y_mm=200)
+        
     all_trajectories.append({
         "scenario_id": f"S2-{total_count}-Two_Reach",
-        "description": "Two-hand symmetric reach forward (200mm Y intrusion).",
+        "description": "Two-hand symmetric reach 200mm towards the robot.",
         "trajectory_data": generate_trajectory(INITIAL_POSE, 50, 5.0, two_hand_motion)
     })
 
-# S3: Prolonged Interaction (15 trajectories)
-for i in range(15):  # Lean-in
+# S3: Prolonged Interaction (15 trajectories) - Torso/Capsule test
+for i in range(15): # Lean-in
     total_count += 1
+    # Randomize the maximum lean amount
+    max_lean = np.random.randint(100, 200)
     all_trajectories.append({
         "scenario_id": f"S3-{total_count}-Lean_In",
-        "description": f"Slow, prolonged lean-in/sway (5s) for sustained APF stress (max {np.random.randint(100, 200)}mm lean).",
-        "trajectory_data": generate_trajectory(INITIAL_POSE, 50, 5.0,
-                                               lambda p, t, d: motion_lean_in(p, t, d,
-                                                                              max_lean_mm=np.random.randint(100, 200)))
+        "description": f"Slow, prolonged lean-in/sway (5s) with max {max_lean}mm lean towards robot.",
+        "trajectory_data": generate_trajectory(INITIAL_POSE, 50, 5.0, 
+                                               lambda p, t, d: motion_lean_in(p, t, d, max_lean_mm=max_lean))
     })
 
 # --- 5. EXPORT TO JSON FILE ---
@@ -169,4 +168,4 @@ filename = "human_trajectories_50.json"
 with open(filename, 'w') as f:
     json.dump(all_trajectories, f, indent=2)
 
-print(f"\nSuccessfully generated {total_count} trajectories and saved to {filename}")
+print(f"\nSuccessfully generated {total_count} trajectories with human close to robot and saved to {filename}")
