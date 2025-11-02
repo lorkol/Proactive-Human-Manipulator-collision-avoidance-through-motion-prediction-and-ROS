@@ -15,7 +15,7 @@ import time
 import threading
 import cupy as cp
 
-global pose_seq, joint_positions,body_links
+global pose_seq, joint_positions, body_links
 body_links=[]
 
 class JointStateReader(Node):
@@ -161,8 +161,8 @@ class UR16TrajectoryPublisher(Node):
             if apf > 10: #stop and replan
                 # print("APF",apf)
                 self.send_trajectory(list(joint_positions), 500000000)
-                published=published+((joint_positions-published+cp.pi)%(2*cp.pi)-cp.pi)
                 # print("Replanning APF ABOVE 10")
+                published=published+((joint_positions-published+np.pi)%(2*np.pi)-np.pi)
                 new_path = arrt(joint_positions.copy(), phase_sequence[phase][1].copy(),no_nodes)
                 # if validate_path(new_path):
                 #     path = new_path.copy()
@@ -173,14 +173,14 @@ class UR16TrajectoryPublisher(Node):
                 if len(new_path)>=1:
                     path = new_path.copy()
                     self.send_trajectory(list(path[1]), 500000000)
-                    published=published+((path[1]-published+cp.pi)%(2*cp.pi)-cp.pi)
+                    published=published+((path[1]-published+np.pi)%(2*np.pi)-np.pi)
                     time.sleep(0.5)
                     step=2
                 continue
             
             else: #iterate through the path or change phase
                 if step>=len(path): #change phase
-                    check_p=cp.linalg.norm([((joint_positions.copy()-phase_sequence[phase][1].copy()+cp.pi)%(2*cp.pi)-cp.pi)])
+                    check_p=cp.linalg.norm([((joint_positions.copy()-phase_sequence[phase][1].copy()+np.pi)%(2*np.pi)-np.pi)])
                     # print(check_p,phase)
                     if check_p<0.15:
                         
@@ -189,13 +189,13 @@ class UR16TrajectoryPublisher(Node):
                     path = arrt(joint_positions.copy(), phase_sequence[phase][1].copy(),no_nodes)
                     # print(path)
                     step=1
-                check=cp.linalg.norm(((joint_positions.copy()-published+cp.pi)%(2*cp.pi)-cp.pi))
+                check=cp.linalg.norm(((joint_positions.copy()-published+np.pi)%(2*np.pi)-np.pi))
                 # print("Check value and phase",check, phase)
                 #publish next step if past published config has been reached
                 if check<0.15:
                     # print("step increments")
                     tbs = path[step].copy()
-                    tbs = published+((tbs-published+cp.pi)%(2*cp.pi)-cp.pi)
+                    tbs = published+((tbs-published+np.pi)%(2*np.pi)-np.pi)
                     self.send_trajectory(list(tbs), 500000000)
                     # joint_array=normalize_joints(path[step])
                     # print("joint",joint_array)
@@ -205,7 +205,7 @@ class UR16TrajectoryPublisher(Node):
                     step+=1
 
 def normalize_joints(joints):
-    return (cp.array(joints) + cp.pi) % (2 * cp.pi) - cp.pi
+    return (cp.array(joints) + np.pi) % (2 * np.pi) - np.pi
 
 def validate_path(path):
     for q in path:
@@ -214,11 +214,11 @@ def validate_path(path):
     return True 
 
 dh_params = [
-    [0,       0,        0.1807,   cp.pi/2],
+    [0,       0,        0.1807,   np.pi/2],
     [0,  -0.4784,       0,        0],
     [0,  -0.36,         0,        0],
-    [0,       0,        0.17415,  cp.pi/2],
-    [0,       0,        0.11985, -cp.pi/2],
+    [0,       0,        0.17415,  np.pi/2],
+    [0,       0,        0.11985, -np.pi/2],
     [0,       0,        0.11655,  0]
 ]
 
@@ -272,7 +272,7 @@ def capsule_contrib(pt,params,dth = 500):
     elif d>dth:
         return 0
     else:
-        return cp.cos((d*cp.pi)/(2*dth)).get()
+        return cp.cos((d*np.pi)/(2*dth)).get()
 
 def extract_links(pose):
     links=[]
@@ -318,12 +318,12 @@ def arrt(q_start,q_goal,n_nodes=100):
             self.f=0
     
     def js_dist(q1,q2):
-        min_diff = (q2-q1 + cp.pi) % (2 * cp.pi) - cp.pi
+        min_diff = (q2-q1 + np.pi) % (2 * np.pi) - np.pi
         # min_diff = q2-q1
         return cp.linalg.norm(min_diff)
 
     def steer(q1,q2,step_size = 0.10):
-        direction = (q2-q1+cp.pi)%(2*cp.pi)-cp.pi
+        direction = (q2-q1+np.pi)%(2*np.pi)-np.pi
         if cp.linalg.norm(direction)<1e-6:
             return cp.zeros(q1.shape)
         # direction = q2-q1:
@@ -351,12 +351,12 @@ def arrt(q_start,q_goal,n_nodes=100):
     n_used=0
     while itr_n<n_nodes:
         q_rand = q_goal if cp.random.rand()<0.1 else cp.random.normal(loc=q_goal, scale=0.5, size=6)
-        q_rand = (q_rand+cp.pi)%(2*cp.pi)-cp.pi
+        q_rand = (q_rand+np.pi)%(2*np.pi)-np.pi
         n_explored+=1
         i_min = 0
         min_dist = 10000000
         for i in range(len(nodes)):
-            if js_dist(q_rand,nodes[i].q) < min_dist:
+            if js_dist(q_rand, nodes[i].q) < min_dist:
                 i_min = i
                 min_dist = js_dist(q_rand,nodes[i].q)
         q_nearest = nodes[i_min].q
