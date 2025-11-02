@@ -161,7 +161,6 @@ class UR16TrajectoryPublisher(Node):
             if apf > 10: #stop and replan
                 # print("APF",apf)
                 self.send_trajectory(list(joint_positions), 500000000)
-                # print("Replanning APF ABOVE 10")
                 published=published+((joint_positions-published+np.pi)%(2*np.pi)-np.pi)
                 new_path = arrt(joint_positions.copy(), phase_sequence[phase][1].copy(),no_nodes)
                 # if validate_path(new_path):
@@ -254,19 +253,20 @@ def capsule_contrib(pt,params,dth = 500):
     p1, p2, r = params
     p1=cp.array(p1)
     p2=cp.array(p2)
-    if cp.linalg.norm(p2-p1)<1e-6:
+    p2_minus_p1: cp.array = p2 - p1
+    p2_p1_norm: float = cp.linalg.norm(p2_minus_p1)
+    pt_minus_p1: cp.array = pt - p1
+    pt_p1_norm: float = cp.linalg.norm(pt_minus_p1)
+    if p2_p1_norm < 1e-6:
         return 0
-    d_axial = cp.dot(pt-p1,p2-p1)/cp.linalg.norm(p2-p1)
-    d_radial = cp.sqrt(cp.linalg.norm(pt-p1)**2 - d_axial**2)
-    if d_axial<0:
-        d = cp.linalg.norm(pt-p1)-r  
-        
-    elif d_axial>cp.linalg.norm(p2-p1):
-        d = cp.linalg.norm(pt-p2)-r  
-        
+    d_axial = cp.dot(pt_minus_p1,p2_minus_p1)/p2_p1_norm
+    d_radial = cp.sqrt(pt_p1_norm**2 - d_axial**2)
+    if d_axial < 0:
+        d = pt_p1_norm-r        
+    elif d_axial > p2_p1_norm:
+        d = cp.linalg.norm(pt-p2)-r
     else:
         d = d_radial-r
-    
     if d<0:
         return 2
     elif d>dth:
@@ -297,9 +297,8 @@ def extract_links(pose):
     return links
 
 def APF(q):
-    mani_pts = get_full_link_points(forward_kinematics(q))
-    
     global pose_seq,body_links #body_links: 10x(point, point, scalar), mani_pts: 25xpoint
+    mani_pts: cp.array = get_full_link_points(forward_kinematics(q))
     # P = 0
     # wt = [1] * len(pose_seq)
     
