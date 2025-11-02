@@ -133,13 +133,13 @@ class UR16TrajectoryPublisher(Node):
         traj.points.append(point)
         self.publisher_.publish(traj)
 
-    global initial_c,path,phase,step
-    initial_c=0
+    global initial_c, path, phase, step
+    initial_c =0
     
     phase, step = 0, 0
 
     def main_loop(self):
-        global pose_seq,initial_c,path,phase,step,joint_positions
+        global pose_seq, initial_c, path,phase, step, joint_positions
         published=cp.array([])
         time.sleep(0.5)
         no_nodes=200
@@ -158,7 +158,7 @@ class UR16TrajectoryPublisher(Node):
             apf = APF(joint_positions)
             # print("APF",apf)
             # print("phase",phase)
-            if apf>10: #stop and replan
+            if apf > 10: #stop and replan
                 # print("APF",apf)
                 self.send_trajectory(list(joint_positions), 500000000)
                 published=published+((joint_positions-published+cp.pi)%(2*cp.pi)-cp.pi)
@@ -251,7 +251,7 @@ def get_full_link_points(joint_positions, num_points=5):
     return cp.array(link_points)
 
 def capsule_contrib(pt,params,dth = 500):
-    p1,p2,r = params
+    p1, p2, r = params
     p1=cp.array(p1)
     p2=cp.array(p2)
     if cp.linalg.norm(p2-p1)<1e-6:
@@ -297,9 +297,9 @@ def extract_links(pose):
     return links
 
 def APF(q):
-    global pose_seq,body_links
     mani_pts = get_full_link_points(forward_kinematics(q))
     
+    global pose_seq,body_links #body_links: 10x(point, point, scalar), mani_pts: 25xpoint
     # P = 0
     # wt = [1] * len(pose_seq)
     
@@ -349,7 +349,7 @@ def arrt(q_start,q_goal,n_nodes=100):
     print("Planning...")
     n_explored=0
     n_used=0
-    while itr_n<n_nodes: 
+    while itr_n<n_nodes:
         q_rand = q_goal if cp.random.rand()<0.1 else cp.random.normal(loc=q_goal, scale=0.5, size=6)
         q_rand = (q_rand+cp.pi)%(2*cp.pi)-cp.pi
         n_explored+=1
@@ -364,8 +364,8 @@ def arrt(q_start,q_goal,n_nodes=100):
         #Deduce the new node's config
         q_new = steer(q_nearest,q_rand)
         # print('q_new',q_new)
-        
-        if APF(q_new)> 8:  
+        apf = APF(q_new)
+        if apf> 8:  
             continue
         n_used+=1
         itr_n+=1
