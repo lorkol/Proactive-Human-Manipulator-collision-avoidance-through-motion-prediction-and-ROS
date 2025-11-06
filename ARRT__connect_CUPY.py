@@ -30,6 +30,8 @@ Link: TypeAlias = Tuple[Position, Position, float]
 
 # Global vars
 pose_seq: HumanPoseSequence = None
+destination: RobotAnglesVector = None
+'''Current robot destination as read from /joint_destination'''
 body_links: List[Link] = []
 '''List of human body links extracted from the current human pose'''
 robot_joint_angles: RobotAnglesVector = cp.zeros(6)
@@ -67,7 +69,20 @@ class JointStateReader(Node):
         '''Robot joint names in order'''
         j_positions: Dict[str, List[float]] = dict(zip(msg.name, msg.position))
         robot_joint_angles: RobotAnglesVector = cp.array([j_positions[joint] for joint in joint_order])
+        
+class DestinationReader(Node):
+    """Regarding the Destination ."""
+    def __init__(self) -> None:
+        super().__init__('destination_reader')
+        self.subscription = self.create_subscription(
+            JointTrajectoryPoint,
+            '/joint_destination',
+            self.destination_callback,
+            10)
 
+    def destination_callback(self, msg) -> None:
+        global destination
+        destination: RobotAnglesVector = cp.array(msg.positions)
 
 class PoseListener(Node):
     def __init__(self) -> None:
@@ -115,17 +130,15 @@ class UR16TrajectoryPublisher(Node):
         self.publisher_.publish(traj)
 
     def main_loop(self) -> None:
-        global robot_joint_angles, body_links, published
-        time.sleep(0.5)
-        # TODO REPLACE BY READING FROM THE DESTINATION TOPIC AND REPLACE THE PHASE PART
-        pick: RobotAnglesVector = cp.array([0.0, -1.0, 1.5, -3.0, 0.0, 0.0])
-        place: RobotAnglesVector = cp.array([-2.0, -1.0,  1.5, -3.0,  0.0, 0.0])
-        phase_sequence: List[Tuple[RobotAnglesVector, RobotAnglesVector]] = [(pick.copy(), place.copy()), (place.copy(), pick.copy())]
-        phase: int = 0
+        global robot_joint_angles, body_links, published, destination
+        time.sleep(0.5)  # Wait for other nodes to initialize
+        #Wait until there is a destinaition to go to
+        while destination is None and rclpy.ok():
+            time.sleep(0.1)
 
-        current: RobotAnglesVector = pick
+        current: RobotAnglesVector = robot_joint_angles.copy()
         self.send_trajectory(current, 500000000)
-        path: List[RobotAnglesVector] = arrt(current, phase_sequence[phase][1], 200)
+        path: List[RobotAnglesVector] = arrt(current, destination, 200)
         print("After initial planning, path length:", len(path))
         step: int = 1
 
@@ -138,7 +151,7 @@ class UR16TrajectoryPublisher(Node):
                 
             if apf > apf_th:
                 self.send_trajectory(robot_joint_angles, 500000000)
-                path = arrt(robot_joint_angles, phase_sequence[phase][1], 200)
+                path = arrt(robot_joint_angles, destination, 200)
                 print("Replanned path due to apf threshold length:", len(path))
                 self.send_trajectory(path[1], 500000000)
                 step = 2
@@ -150,9 +163,8 @@ class UR16TrajectoryPublisher(Node):
                 self.send_trajectory(next_pos, 500000000)
                 step += 1
 
-            if step >= len(path) and cp.linalg.norm(((robot_joint_angles - phase_sequence[phase][1] + cp.pi) % (2 * cp.pi)) - cp.pi) < 0.1:
-                phase = (phase + 1) % 2
-                path = arrt(robot_joint_angles, phase_sequence[phase][1], 200)
+            if step >= len(path) and cp.linalg.norm(((robot_joint_angles - destination + cp.pi) % (2 * cp.pi)) - cp.pi) < 0.1:
+                path = arrt(robot_joint_angles, destination, 200)
                 print("New phase planned path length:", len(path))
                 self.send_trajectory(path[1], 500000000)
                 step = 2
@@ -251,28 +263,29 @@ def APF_gpu(q: RobotAnglesVector, links: List[Link]) -> float:
     print(f"APF computation time: {time.time()-t1:.6f} seconds")
     return ccb
 
+# -------------------------RRT Implementation-------------------------
+class RRTNode:
+    def __init__(self, q: RobotAnglesVector) -> None:
+        self.q: RobotAnglesVector = q
+        self.parent: 'RRTNode' = None
+        self.cost: float = 0.
+
+def steer(q1: RobotAnglesVector, q2: RobotAnglesVector, step: float = 0.2) -> RobotAnglesVector:
+    d = (q2 - q1 + cp.pi) % (2 * cp.pi) - cp.pi
+    norm = cp.linalg.norm(d)
+    return q1 + d * (step / norm) if norm > 1e-6 else q1
 
 # ----------------- A-RRT* Planning Function -----------------
 def arrt(q_start: RobotAnglesVector, q_goal: RobotAnglesVector, n_nodes: int = 100) -> List[RobotAnglesVector]:
     start_t = time.time()
     n_explored: int = 0
     n_used: int = 0
-    class RRTNode:
-        def __init__(self, q: RobotAnglesVector) -> None:
-            self.q: RobotAnglesVector = q
-            self.parent: 'RRTNode' = None
-            self.cost: float = 0.
-
-    def steer(q1: RobotAnglesVector, q2: RobotAnglesVector, step: float = 0.2) -> RobotAnglesVector:
-        d = (q2 - q1 + cp.pi) % (2 * cp.pi) - cp.pi
-        norm = cp.linalg.norm(d)
-        return q1 + d * (step / norm) if norm > 1e-6 else q1
         
 
     start_tree: List[RRTNode] = [RRTNode(q_start)]
     goal_tree: List[RRTNode] = [RRTNode(q_goal)]
     itr: int = 0
-    while itr<n_nodes:
+    while itr < n_nodes:
         q_rand: RobotAnglesVector = q_goal if cp.random.rand() < 0.1 else (cp.random.normal(loc=q_goal, scale=1))
         q_rand = (q_rand + cp.pi) % (2 * cp.pi) - cp.pi
         n_explored += 1
@@ -343,6 +356,7 @@ def main(args=None):
     rclpy.init(args=args)
     pose_listener = PoseListener()
     joint_reader = JointStateReader()
+    destination_reader = DestinationReader()
     trajectory_publisher = UR16TrajectoryPublisher()
 
     executor = MultiThreadedExecutor()
@@ -351,12 +365,14 @@ def main(args=None):
 
     executor.add_node(pose_listener)
     executor.add_node(joint_reader)
+    executor.add_node(destination_reader)
     executor.add_node(trajectory_publisher)
 
     try:
         executor.spin()
     finally:
         joint_reader.destroy_node()
+        destination_reader.destroy_node()
         pose_listener.destroy_node()
         trajectory_publisher.destroy_node()
         rclpy.shutdown()
