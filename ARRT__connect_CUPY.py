@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+from typing import Annotated, Dict, List, TypeAlias, Tuple
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray
@@ -9,14 +10,34 @@ from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from builtin_interfaces.msg import Duration
 from sklearn.neighbors import KDTree
 import cupy as cp
-import heapq
+from cupy.typing import NDArray
 import time
 import threading
 
+# Type Aliasing
+RobotAnglesVector: TypeAlias = Annotated[NDArray[cp.float64], cp.ndarray]
+"""Shape : (6,) representing the 6 joint angles of the robot"""
+RobotJointPositions: TypeAlias = Annotated[NDArray[cp.float64], cp.ndarray]
+'''Shape : (6, 3) representing the x,y,z positions of each of the 6 robot joints'''
+HumanPoseSequence: TypeAlias = Annotated[NDArray[cp.float64], cp.ndarray]
+'''Shape : (N, 15, 3) where N is the number of time steps - Currently 1, each pose has 15 joints with (x,y,z) coordinates'''
+HumanPose: TypeAlias = Annotated[NDArray[cp.float64], cp.ndarray]
+'''Shape : (15, 3) human pose in a single time step each pose has 15 joints with (x,y,z) coordinates'''
+Position: TypeAlias = Annotated[NDArray[cp.float64], cp.ndarray]
+'''Shape : (3,) representing a 3D position vector'''
+Link: TypeAlias = Tuple[Position, Position, float]
+'''A body link represented by two end positions and a radius'''
+
 # Global vars
-pose_seq, joint_positions, body_links = None, None, []
-published = None
-apf_th=20
+pose_seq: HumanPoseSequence = None
+body_links: List[Link] = []
+'''List of human body links extracted from the current human pose'''
+robot_joint_angles: RobotAnglesVector = cp.zeros(6)
+"""Robot joint positions as in the angle it is currently in as a cupy array of shape (6,)"""
+
+published: RobotAnglesVector = None
+apf_th: float = 20.
+'''Threshold for the APF value to trigger replanning. Adjust based on environment and robot configuration.'''
 
 dh_params = cp.array([
     [0,       0,        0.1807,   cp.pi/2],
@@ -29,7 +50,8 @@ dh_params = cp.array([
 
 
 class JointStateReader(Node):
-    def __init__(self):
+    """Regarding the ROBOT joint positions."""
+    def __init__(self) -> None:
         super().__init__('joint_state_reader')
         self.subscription = self.create_subscription(
             JointState,
@@ -37,18 +59,19 @@ class JointStateReader(Node):
             self.joint_callback,
             10)
 
-    def joint_callback(self, msg):
-        global joint_positions
-        joint_order = [
+    def joint_callback(self, msg) -> None:
+        global robot_joint_angles
+        joint_order: List[str] = [
             'shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint',
             'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']
-        j_positions = dict(zip(msg.name, msg.position))
-        joint_positions = cp.array([j_positions[joint] for joint in joint_order])
+        '''Robot joint names in order'''
+        j_positions: Dict[str, List[float]] = dict(zip(msg.name, msg.position))
+        robot_joint_angles: RobotAnglesVector = cp.array([j_positions[joint] for joint in joint_order])
 
 
 class PoseListener(Node):
-    def __init__(self):
-        self.ready = False
+    def __init__(self) -> None:
+        self.ready: bool = False
         super().__init__('pose_listener')
         self.subscription = self.create_subscription(
             Float32MultiArray,
@@ -57,15 +80,15 @@ class PoseListener(Node):
             10
         )
 
-    def listener_callback(self, msg):
+    def listener_callback(self, msg) -> None:
         global pose_seq, body_links
-        self.ready = True
-        pose_seq = cp.array(msg.data).reshape((1, 15, 3))
-        body_links = extract_links_gpu(pose_seq[0])
+        self.ready: bool = True
+        pose_seq: HumanPoseSequence = cp.array(msg.data).reshape((1, 15, 3))
+        body_links: List[Link] = extract_links_gpu(pose_seq[0])
 
 
 class UR16TrajectoryPublisher(Node):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__('ur16_pick_place_loop')
         self.publisher_ = self.create_publisher(
             JointTrajectory,
@@ -75,12 +98,12 @@ class UR16TrajectoryPublisher(Node):
         thread = threading.Thread(target=self.main_loop, daemon=True)
         thread.start()
 
-    def send_trajectory(self, positions, duration_nsec):
+    def send_trajectory(self, positions: RobotAnglesVector, duration_nsec: int) -> None:
         global published
         if published is None:
             published = positions
         else:
-            published+=((positions-published+cp.pi)%(2*cp.pi)-cp.pi)
+            published += ((positions - published + cp.pi) % (2 * cp.pi) - cp.pi)
         traj = JointTrajectory()
         traj.joint_names = [
             'shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint',
@@ -91,38 +114,41 @@ class UR16TrajectoryPublisher(Node):
         traj.points.append(point)
         self.publisher_.publish(traj)
 
-    def main_loop(self):
-        global joint_positions, body_links, published
+    def main_loop(self) -> None:
+        global robot_joint_angles, body_links, published
         time.sleep(0.5)
-        pick = cp.array([0.0, -1.0, 1.5, -3.0, 0.0, 0.0])
-        place = cp.array([-2.0, -1.0,  1.5, -3.0,  0.0, 0.0])
-        phase_sequence = [(pick.copy(), place.copy()), (place.copy(), pick.copy())]
-        phase = 0
+        # TODO REPLACE BY READING FROM THE DESTINATION TOPIC AND REPLACE THE PHASE PART
+        pick: RobotAnglesVector = cp.array([0.0, -1.0, 1.5, -3.0, 0.0, 0.0])
+        place: RobotAnglesVector = cp.array([-2.0, -1.0,  1.5, -3.0,  0.0, 0.0])
+        phase_sequence: List[Tuple[RobotAnglesVector, RobotAnglesVector]] = [(pick.copy(), place.copy()), (place.copy(), pick.copy())]
+        phase: int = 0
 
-        current = pick
+        current: RobotAnglesVector = pick
         self.send_trajectory(current, 500000000)
-        path = arrt(current, phase_sequence[phase][1], 200)
-        step = 1
+        path: List[RobotAnglesVector] = arrt(current, phase_sequence[phase][1], 200)
+        print("After initial planning, path length:", len(path))
+        step: int = 1
         # published = current
 
         while rclpy.ok():
-            apf = APF_gpu(joint_positions, body_links)
-            temp = step
-            while apf<apf_th and (temp<len(path) and temp-step<3):
-                apf = max(apf,APF_gpu(path[temp], body_links))
-                temp+=1
+            apf: float = APF_gpu(robot_joint_angles, body_links)
+            temp: int = step
+            while apf < apf_th and (temp < len(path) and temp - step < 3):
+                apf = max(apf, APF_gpu(path[temp], body_links))
+                temp += 1
                 
             # print("apf",apf)
             # if APF_gpu(joint_positions, body_links) > 10:
-            if apf>apf_th:
-                self.send_trajectory(joint_positions, 500000000)
-                path = arrt(joint_positions, phase_sequence[phase][1], 200)
+            if apf > apf_th:
+                self.send_trajectory(robot_joint_angles, 500000000)
+                path = arrt(robot_joint_angles, phase_sequence[phase][1], 200)
+                print("Replanned path due to apf threshold length:", len(path))
                 self.send_trajectory(path[1], 500000000)
                 step = 2
                 # published = path[0]
                 continue
 
-            dist = cp.linalg.norm(((joint_positions - published + cp.pi) % (2 * cp.pi)) - cp.pi)
+            dist = cp.linalg.norm(((robot_joint_angles - published + cp.pi) % (2 * cp.pi)) - cp.pi)
             # print(dist)
             # print("phase",phase)
             if dist < 0.1 and step < len(path):
@@ -131,12 +157,13 @@ class UR16TrajectoryPublisher(Node):
                 # published = next_pos
                 step += 1
 
-            if step >= len(path) and cp.linalg.norm(((joint_positions - phase_sequence[phase][1] + cp.pi) % (2 * cp.pi)) - cp.pi)<0.1:
+            if step >= len(path) and cp.linalg.norm(((robot_joint_angles - phase_sequence[phase][1] + cp.pi) % (2 * cp.pi)) - cp.pi) < 0.1:
                 phase = (phase + 1) % 2
                 # print('new_phase',phase)
                 # print('new_target',phase_sequence[phase][1])
                 # print('new_path',path)
-                path = arrt(joint_positions, phase_sequence[phase][1], 200)
+                path = arrt(robot_joint_angles, phase_sequence[phase][1], 200)
+                print("New phase planned path length:", len(path))
                 self.send_trajectory(path[1], 500000000)
                 step = 2
                 # published = path[0]
@@ -144,7 +171,8 @@ class UR16TrajectoryPublisher(Node):
 
 # ----------------- GPU-Optimized Utility Functions -----------------
 
-def dh_transform_batch(joints):
+def dh_transform_batch(joints: RobotAnglesVector) -> RobotJointPositions:
+    """Returns the x,y,z positions of each joint given the joint angles using DH parameters."""
     T = cp.eye(4)
     positions = []
     for i in range(6):
@@ -169,9 +197,8 @@ def dh_transform_batch(joints):
 
     return cp.stack(positions) * 1000  # shape: (6, 3) in mm
 
-
-
-def get_full_link_points_gpu(joints, n=5):
+# TODO understand what this returns
+def get_full_link_points_gpu(joints: RobotJointPositions, n: int = 5) :
     # print(joints.shape)
     start = joints[:-1]  # (5, 3)
     end = joints[1:]     # (5, 3)
@@ -180,19 +207,21 @@ def get_full_link_points_gpu(joints, n=5):
     pts = start[:, None, :] * (1 - interp) + end[:, None, :] * interp  # (5, N, 3)
     return pts.reshape(-1, 3) 
 
-def extract_links_gpu(pose):
-    links = []
+def extract_links_gpu(pose: HumanPose) -> List[Link]:
+    links: List[Link] = []
 
     # torso
-    tc = (pose[0] + pose[1]) / 2
-    bc = (pose[9] + pose[10]) / 2
-    rad = cp.maximum(cp.linalg.norm(pose[2] - pose[3]), cp.linalg.norm(pose[9] - pose[10])) / 2
+    tc: Position = (pose[0] + pose[1]) / 2
+    '''Average of left and right shoulders'''
+    bc: Position = (pose[9] + pose[10]) / 2
+    '''Average of left and right hips'''
+    rad: float = cp.maximum(cp.linalg.norm(pose[2] - pose[3]), cp.linalg.norm(pose[9] - pose[10])) / 2 #TODO find out what this is for commenting
     links.append((tc, bc, rad))
 
     # head
-    bc = (pose[0] + pose[1]) / 2
+    bc: Position = (pose[0] + pose[1]) / 2
     direction = pose[1] - pose[8]
-    direction_norm = cp.linalg.norm(direction)
+    direction_norm: float = cp.linalg.norm(direction)
     if direction_norm < 1e-6:
         direction = cp.zeros_like(direction)
     else:
@@ -210,91 +239,94 @@ def extract_links_gpu(pose):
 
     return links
 
-def capsule_contrib_batch(points, links, dth=500):
-    total = 0
+def capsule_contrib_batch(points: RobotJointPositions, links: List[Link], dth=500) -> float:
+    total: float = 0.
     for p1, p2, r in links:
         d_vec = p2 - p1
-        d_norm = cp.linalg.norm(d_vec)
+        d_norm: float = cp.linalg.norm(d_vec)
         if d_norm<1e-6:
             continue
-        v = points - p1
-        axial = cp.dot(v, d_vec) / d_norm
+        v = points - p1 # TODO the types mismatch. points is 6x3, but p1 is 3x1
+        axial: float = cp.dot(v, d_vec) / d_norm
         proj = cp.outer(axial / d_norm, d_vec)
-        radial = cp.linalg.norm(v - proj, axis=1)
+        radial: float = cp.linalg.norm(v - proj, axis=1)
         d = cp.where(axial < 0, cp.linalg.norm(v, axis=1) - r,
             cp.where(axial > d_norm, cp.linalg.norm(points - p2, axis=1) - r, radial - r))
         contrib = cp.where(d < 0, 2, cp.where(d > dth, 0, cp.cos((d * cp.pi) / (2 * dth))))
         total += contrib.sum()
     return total
 
-def APF_gpu(q, links):
-    pts = get_full_link_points_gpu(dh_transform_batch(q))
-    return capsule_contrib_batch(pts, links)
+def APF_gpu(q: RobotAnglesVector, links: List[Link]) -> float:
+    t1 = time.time()
+    pts: RobotJointPositions = get_full_link_points_gpu(dh_transform_batch(q))
+    ccb: float = capsule_contrib_batch(pts, links)
+    print(f"APF computation time: {time.time()-t1:.6f} seconds")
+    return ccb
 
 
 # ----------------- A-RRT* Planning Function -----------------
-def arrt(q_start, q_goal, n_nodes=100):
+def arrt(q_start: RobotAnglesVector, q_goal: RobotAnglesVector, n_nodes: int = 100) -> List[RobotAnglesVector]:
     start_t = time.time()
-    n_explored=0
-    n_used=0
-    class Node:
-        def __init__(self, q):
-            self.q = q
-            self.parent = None
-            self.cost = 0
+    n_explored: int = 0
+    n_used: int = 0
+    class RRTNode:
+        def __init__(self, q: RobotAnglesVector) -> None:
+            self.q: RobotAnglesVector = q
+            self.parent: 'RRTNode' = None
+            self.cost: float = 0.
 
-    def steer(q1, q2, step=0.2):
+    def steer(q1: RobotAnglesVector, q2: RobotAnglesVector, step: float = 0.2) -> RobotAnglesVector:
         d = (q2 - q1 + cp.pi) % (2 * cp.pi) - cp.pi
         norm = cp.linalg.norm(d)
         return q1 + d * (step / norm) if norm > 1e-6 else q1
         
 
-    start_tree = [Node(q_start)]
-    goal_tree = [Node(q_goal)]
-    itr=0
+    start_tree: List[RRTNode] = [RRTNode(q_start)]
+    goal_tree: List[RRTNode] = [RRTNode(q_goal)]
+    itr: int = 0
     while itr<n_nodes:
-        q_rand = q_goal if cp.random.rand() < 0.1 else (cp.random.normal(loc=q_goal, scale=1))
+        q_rand: RobotAnglesVector = q_goal if cp.random.rand() < 0.1 else (cp.random.normal(loc=q_goal, scale=1))
         q_rand = (q_rand + cp.pi) % (2 * cp.pi) - cp.pi
-        n_explored+=1
-        closest = min(start_tree, key=lambda n: cp.linalg.norm((q_rand - n.q + cp.pi) % (2 * cp.pi) - cp.pi))
-        q_new = steer(closest.q, q_rand)
+        n_explored += 1
+        closest: RRTNode = min(start_tree, key=lambda n: cp.linalg.norm((q_rand - n.q + cp.pi) % (2 * cp.pi) - cp.pi))
+        q_new: RobotAnglesVector = steer(closest.q, q_rand)
         
 
         if APF_gpu(q_new, body_links) > apf_th:
             continue
-        
-        itr+=1
-        n_used+=1
-        node = Node(q_new)
+
+        itr += 1
+        n_used += 1
+        node: RRTNode = RRTNode(q_new)
         node.parent = closest
         start_tree.append(node)
         
         #connect step
-        connected = False
-        closest_goal = min(goal_tree, key=lambda n: cp.linalg.norm((q_new - n.q + cp.pi) % (2 * cp.pi) - cp.pi))
+        connected: bool = False
+        closest_goal: RRTNode = min(goal_tree, key=lambda n: cp.linalg.norm((q_new - n.q + cp.pi) % (2 * cp.pi) - cp.pi))
         dir = (q_new - closest_goal.q+ cp.pi) % (2 * cp.pi) - cp.pi
-        norm = cp.linalg.norm(dir)
+        norm: float = cp.linalg.norm(dir)
         if norm > 0.2:
             dir = dir * (0.2 / norm)  
         else:
-            connected=True
-        q_added = closest_goal.q+dir
-        par = closest_goal
-        while APF_gpu(q_added, body_links)<apf_th and connected==False:
-            nn = Node(q_added)
+            connected = True
+        q_added: RobotAnglesVector = closest_goal.q + dir
+        par: RRTNode = closest_goal
+        while APF_gpu(q_added, body_links) < apf_th and connected==False:
+            nn: RRTNode = RRTNode(q_added)
             nn.parent = par
             goal_tree.append(nn)
             par = nn
             q_added = (q_added+dir + cp.pi) % (2 * cp.pi) - cp.pi
             if cp.linalg.norm((q_added - q_new+ cp.pi) % (2 * cp.pi) - cp.pi)<0.2:
-                connected=True
+                connected = True
                 break
         
         if connected == True:
             break
         
         if cp.linalg.norm((q_new - q_goal + cp.pi) % (2 * cp.pi) - cp.pi) < 0.2:
-            final = Node(q_goal)
+            final: RRTNode = RRTNode(q_goal)
             final.parent = node
             start_tree.append(final)
             break
@@ -305,8 +337,8 @@ def arrt(q_start, q_goal, n_nodes=100):
     print("n_used",n_used)
     print("start_tree",len(start_tree))
     print("goal_tree",len(goal_tree))
-    path = []
-    node = start_tree[-1]
+    path: List[RobotAnglesVector] = []
+    node: RRTNode = start_tree[-1]
     while node:
         path.append(node.q)
         node = node.parent
