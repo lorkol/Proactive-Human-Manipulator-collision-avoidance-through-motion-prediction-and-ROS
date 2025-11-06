@@ -128,7 +128,6 @@ class UR16TrajectoryPublisher(Node):
         path: List[RobotAnglesVector] = arrt(current, phase_sequence[phase][1], 200)
         print("After initial planning, path length:", len(path))
         step: int = 1
-        # published = current
 
         while rclpy.ok():
             apf: float = APF_gpu(robot_joint_angles, body_links)
@@ -137,36 +136,26 @@ class UR16TrajectoryPublisher(Node):
                 apf = max(apf, APF_gpu(path[temp], body_links))
                 temp += 1
                 
-            # print("apf",apf)
-            # if APF_gpu(joint_positions, body_links) > 10:
             if apf > apf_th:
                 self.send_trajectory(robot_joint_angles, 500000000)
                 path = arrt(robot_joint_angles, phase_sequence[phase][1], 200)
                 print("Replanned path due to apf threshold length:", len(path))
                 self.send_trajectory(path[1], 500000000)
                 step = 2
-                # published = path[0]
                 continue
 
             dist = cp.linalg.norm(((robot_joint_angles - published + cp.pi) % (2 * cp.pi)) - cp.pi)
-            # print(dist)
-            # print("phase",phase)
             if dist < 0.1 and step < len(path):
                 next_pos = path[step]
                 self.send_trajectory(next_pos, 500000000)
-                # published = next_pos
                 step += 1
 
             if step >= len(path) and cp.linalg.norm(((robot_joint_angles - phase_sequence[phase][1] + cp.pi) % (2 * cp.pi)) - cp.pi) < 0.1:
                 phase = (phase + 1) % 2
-                # print('new_phase',phase)
-                # print('new_target',phase_sequence[phase][1])
-                # print('new_path',path)
                 path = arrt(robot_joint_angles, phase_sequence[phase][1], 200)
                 print("New phase planned path length:", len(path))
                 self.send_trajectory(path[1], 500000000)
                 step = 2
-                # published = path[0]
 
 
 # ----------------- GPU-Optimized Utility Functions -----------------
@@ -199,7 +188,6 @@ def dh_transform_batch(joints: RobotAnglesVector) -> RobotJointPositions:
 
 # TODO understand what this returns
 def get_full_link_points_gpu(joints: RobotJointPositions, n: int = 5) :
-    # print(joints.shape)
     start = joints[:-1]  # (5, 3)
     end = joints[1:]     # (5, 3)
     interp = cp.linspace(0, 1, n).reshape(1, n, 1)  # (1, N, 1)
