@@ -83,6 +83,7 @@ class DestinationReader(Node):
 
     def destination_callback(self, msg) -> None:
         global destination
+        self.get_logger().info("got new goal")
         destination = cp.array(msg.positions)
 
 class PoseListener(Node):
@@ -114,8 +115,9 @@ class UR16TrajectoryPublisher(Node):
         thread = threading.Thread(target=self.main_loop, daemon=True)
         thread.start()
 
-    def send_trajectory(self, positions: RobotAnglesVector, duration_nsec: int) -> None:
+    def send_trajectory(self, positions: RobotAnglesVector) -> None:
         global published
+        duration_nsec = 500000000 # Default to 0.5 seconds
         if published is None:
             published = positions
         else:
@@ -129,18 +131,20 @@ class UR16TrajectoryPublisher(Node):
         point.time_from_start = Duration(nanosec=duration_nsec)
         traj.points.append(point)
         self.publisher_.publish(traj)
+        self.get_logger().info(f"Published trajectory to: {point.positions}")
 
     def main_loop(self) -> None:
         global robot_joint_angles, body_links, published, destination
         time.sleep(0.5)  # Wait for other nodes to initialize
         #Wait until there is a destinaition to go to
-        while destination is None and rclpy.ok():
+        while destination is None:
+            self.get_logger().info(str(destination))
             time.sleep(0.1)
 
         current: RobotAnglesVector = robot_joint_angles.copy()
-        self.send_trajectory(current, 500000000)
+        self.send_trajectory(current)
         path: List[RobotAnglesVector] = arrt(current, destination, 200)
-        print("After initial planning, path length:", len(path))
+        self.get_logger().info(f"After initial planning, path length: {len(path)}")
         step: int = 1
         look_ahead_steps: int = 3 # How many steps ahead to check for APF threshold exceedance
         while rclpy.ok():
@@ -153,23 +157,23 @@ class UR16TrajectoryPublisher(Node):
                 temp += 1
                 
             if apf > apf_th:
-                self.send_trajectory(robot_joint_angles, 500000000)
+                self.send_trajectory(robot_joint_angles) # Stop movement
                 path = arrt(robot_joint_angles, destination, 200)
-                print("Replanned path due to apf threshold length:", len(path))
-                self.send_trajectory(path[1], 500000000)
+                self.get_logger().warning(f"Replanned path due to apf threshold length: {len(path)}")
+                self.send_trajectory(path[1])
                 step = 2
                 continue
 
             dist = cp.linalg.norm(((robot_joint_angles - published + cp.pi) % (2 * cp.pi)) - cp.pi)
             if dist < 0.1 and step < len(path):
                 next_pos = path[step]
-                self.send_trajectory(next_pos, 500000000)
+                self.send_trajectory(next_pos)
                 step += 1
 
             if step >= len(path) and cp.linalg.norm(((robot_joint_angles - destination + cp.pi) % (2 * cp.pi)) - cp.pi) < 0.1:
                 path = arrt(robot_joint_angles, destination, 200)
-                print("New phase planned path length:", len(path))
-                self.send_trajectory(path[1], 500000000)
+                self.get_logger().info(f"New phase planned path length: {len(path)}")
+                self.send_trajectory(path[1])
                 step = 2
 
 
@@ -263,7 +267,7 @@ def APF_gpu(q: RobotAnglesVector, links: List[Link]) -> float:
     t1 = time.time()
     pts: RobotJointPositions = get_full_link_points_gpu(dh_transform_batch(q))
     ccb: float = capsule_contrib_batch(pts, links)
-    print(f"APF computation time: {time.time()-t1:.6f} seconds")
+    # self.get_logger().info(f"APF computation time: {time.time()-t1:.6f} seconds")
     return ccb
 
 # -------------------------RRT Implementation-------------------------
@@ -315,6 +319,7 @@ def arrt(q_start: RobotAnglesVector, q_goal: RobotAnglesVector, n_nodes: int = 1
         q_added: RobotAnglesVector = closest_goal.q + dir
         par: RRTNode = closest_goal
         while APF_gpu(q_added, body_links) < apf_th and connected==False:
+            # self.get_logger().info("adding nodes to goal tree")
             nn: RRTNode = RRTNode(q_added)
             nn.parent = par
             goal_tree.append(nn)
