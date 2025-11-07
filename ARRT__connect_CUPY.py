@@ -153,7 +153,8 @@ class UR16TrajectoryPublisher(Node):
         while rclpy.ok():
             apf: float = APF_gpu(robot_joint_angles, body_links)
             temp: int = step
-            
+
+            # Check whether destination has been updated
             if destination_outdated:
                 self.get_logger().info("Destination updated, replanning path.")
                 path = arrt(robot_joint_angles, destination, 200)
@@ -162,12 +163,12 @@ class UR16TrajectoryPublisher(Node):
                 step = 2
                 destination_outdated = False
                 continue
-            
+
             # Look ahead along the path to see if APF exceeds threshold
             while apf < apf_th and (temp < len(path) and temp - step < look_ahead_steps):
                 apf = max(apf, APF_gpu(path[temp], body_links))
                 temp += 1
-            
+
             # Replan if APF threshold exceeded
             if apf > apf_th:
                 self.send_trajectory(robot_joint_angles) # Stop movement
@@ -183,7 +184,8 @@ class UR16TrajectoryPublisher(Node):
                 next_pos = path[step]
                 self.send_trajectory(next_pos)
                 step += 1
-
+            
+            # Check if destination reached
             dist = cp.linalg.norm(((robot_joint_angles - destination + cp.pi) % (2 * cp.pi)) - cp.pi)
             if step >= len(path) and dist < 0.1:
                 path = arrt(robot_joint_angles, destination, 200)
