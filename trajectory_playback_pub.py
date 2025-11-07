@@ -73,7 +73,7 @@ class TrajectoryPlaybackPublisher(Node):
             return
 
         if self.current_frame_index >= len(self.current_trajectory):
-            self.get_logger().info("Trajectory finished. Looping to start.")
+            # self.get_logger().info("Trajectory finished. Looping to start.")
             self.current_frame_index = 0
             # Optional: Uncomment the next line to stop at the end instead of looping
             # self.timer.cancel()
