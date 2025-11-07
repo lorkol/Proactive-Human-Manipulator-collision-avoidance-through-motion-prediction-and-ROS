@@ -188,10 +188,7 @@ class UR16TrajectoryPublisher(Node):
             # Check if destination reached
             dist = cp.linalg.norm(((robot_joint_angles - destination + cp.pi) % (2 * cp.pi)) - cp.pi)
             if step >= len(path) and dist < 0.1:
-                path = arrt(robot_joint_angles, destination, 200)
-                self.get_logger().info(f"New phase planned path length: {len(path)}")
-                self.send_trajectory(path[1])
-                step = 2 
+                time.sleep(0.2)  # Idle if at destination 
             
 # ----------------- GPU-Optimized Utility Functions -----------------
 
