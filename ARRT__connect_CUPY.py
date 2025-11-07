@@ -29,9 +29,10 @@ Link: TypeAlias = Tuple[Position, Position, float]
 '''A body link represented by two end positions and a radius'''
 
 # Global vars
-pose_seq: HumanPoseSequence = None
 destination: RobotAnglesVector = None
 '''Current robot destination as read from /joint_destination'''
+pose_seq: HumanPoseSequence = None
+'''Current human pose sequence as read from /joint_array'''
 body_links: List[Link] = []
 '''List of human body links extracted from the current human pose'''
 robot_joint_angles: RobotAnglesVector = cp.zeros(6)
@@ -68,7 +69,7 @@ class JointStateReader(Node):
             'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']
         '''Robot joint names in order'''
         j_positions: Dict[str, List[float]] = dict(zip(msg.name, msg.position))
-        robot_joint_angles: RobotAnglesVector = cp.array([j_positions[joint] for joint in joint_order])
+        robot_joint_angles = cp.array([j_positions[joint] for joint in joint_order])
         
 class DestinationReader(Node):
     """Regarding the Destination ."""
@@ -82,7 +83,7 @@ class DestinationReader(Node):
 
     def destination_callback(self, msg) -> None:
         global destination
-        destination: RobotAnglesVector = cp.array(msg.positions)
+        destination = cp.array(msg.positions)
 
 class PoseListener(Node):
     def __init__(self) -> None:
@@ -98,13 +99,13 @@ class PoseListener(Node):
     def listener_callback(self, msg) -> None:
         global pose_seq, body_links
         self.ready: bool = True
-        pose_seq: HumanPoseSequence = cp.array(msg.data).reshape((1, 15, 3))
-        body_links: List[Link] = extract_links_gpu(pose_seq[0])
+        pose_seq = cp.array(msg.data).reshape((1, 15, 3))
+        body_links = extract_links_gpu(pose_seq[0])
 
 
 class UR16TrajectoryPublisher(Node):
     def __init__(self) -> None:
-        super().__init__('ur16_pick_place_loop')
+        super().__init__('ur16_trajectory_publisher')
         self.publisher_ = self.create_publisher(
             JointTrajectory,
             '/joint_trajectory_controller/joint_trajectory',
@@ -141,7 +142,7 @@ class UR16TrajectoryPublisher(Node):
         path: List[RobotAnglesVector] = arrt(current, destination, 200)
         print("After initial planning, path length:", len(path))
         step: int = 1
-
+        look_ahead_steps: int = 3 # How many steps ahead to check for APF threshold exceedance
         while rclpy.ok():
             apf: float = APF_gpu(robot_joint_angles, body_links)
             temp: int = step
