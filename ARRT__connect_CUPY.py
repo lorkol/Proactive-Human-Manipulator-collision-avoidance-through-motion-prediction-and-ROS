@@ -85,7 +85,7 @@ class DestinationReader(Node):
 
     def destination_callback(self, msg) -> None:
         global destination, destination_outdated
-        self.get_logger().info("got new goal")
+        self.get_logger().info(f"got new goal: {msg.positions}")
         destination = cp.array(msg.positions)
         destination_outdated = True
 
@@ -137,11 +137,11 @@ class UR16TrajectoryPublisher(Node):
         self.get_logger().info(f"Published trajectory to: {point.positions}")
 
     def main_loop(self) -> None:
-        global robot_joint_angles, body_links, published, destination
+        global robot_joint_angles, body_links, published, destination, destination_outdated
         time.sleep(0.5)  # Wait for other nodes to initialize
         #Wait until there is a destinaition to go to
         while destination is None:
-            self.get_logger().info(str(destination))
+            self.get_logger().warning(str(destination))
             time.sleep(0.1)
 
         current: RobotAnglesVector = robot_joint_angles.copy()
@@ -153,6 +153,15 @@ class UR16TrajectoryPublisher(Node):
         while rclpy.ok():
             apf: float = APF_gpu(robot_joint_angles, body_links)
             temp: int = step
+            
+            if destination_outdated:
+                self.get_logger().info("Destination updated, replanning path.")
+                path = arrt(robot_joint_angles, destination, 200)
+                self.get_logger().info(f"Replanned path length: {len(path)}")
+                self.send_trajectory(path[1])
+                step = 2
+                destination_outdated = False
+                continue
             
             # Look ahead along the path to see if APF exceeds threshold
             while apf < apf_th and (temp < len(path) and temp - step < look_ahead_steps):
@@ -180,9 +189,8 @@ class UR16TrajectoryPublisher(Node):
                 path = arrt(robot_joint_angles, destination, 200)
                 self.get_logger().info(f"New phase planned path length: {len(path)}")
                 self.send_trajectory(path[1])
-                step = 2
-
-
+                step = 2 
+            
 # ----------------- GPU-Optimized Utility Functions -----------------
 
 def dh_transform_batch(joints: RobotAnglesVector) -> RobotJointPositions:
