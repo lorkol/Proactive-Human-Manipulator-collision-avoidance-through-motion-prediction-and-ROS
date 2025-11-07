@@ -145,7 +145,9 @@ class UR16TrajectoryPublisher(Node):
         while rclpy.ok():
             apf: float = APF_gpu(robot_joint_angles, body_links)
             temp: int = step
-            while apf < apf_th and (temp < len(path) and temp - step < 3):
+            
+            # Look ahead along the path to see if APF exceeds threshold
+            while apf < apf_th and (temp < len(path) and temp - step < look_ahead_steps):
                 apf = max(apf, APF_gpu(path[temp], body_links))
                 temp += 1
                 
@@ -182,23 +184,23 @@ def dh_transform_batch(joints: RobotAnglesVector) -> RobotJointPositions:
         d = dh_params[i][2]
         alpha = dh_params[i][3]
 
-        cos_theta = cp.cos(theta)
-        sin_theta = cp.sin(theta)
-        cos_alpha = cp.cos(alpha)
-        sin_alpha = cp.sin(alpha)
+        cos_theta: float = cp.cos(theta)
+        sin_theta: float = cp.sin(theta)
+        cos_alpha: float = cp.cos(alpha)
+        sin_alpha: float = cp.sin(alpha)
 
-        A = cp.array([
+        T_i_minus1_i = cp.array([
             [cos_theta, -sin_theta * cos_alpha,  sin_theta * sin_alpha, a * cos_theta],
             [sin_theta,  cos_theta * cos_alpha, -cos_theta * sin_alpha, a * sin_theta],
             [cp.array(0.0), sin_alpha,              cos_alpha,              cp.array(d)],
             [cp.array(0.0), cp.array(0.0),          cp.array(0.0),          cp.array(1.0)]
         ])
-        T = T @ A
+        T = T @ T_i_minus1_i
         positions.append(T[:3, 3])  # Extract current joint position
 
     return cp.stack(positions) * 1000  # shape: (6, 3) in mm
 
-# TODO understand what this returns
+# TODO understand what this returns, also because this reaches capsule_contrib_batch which has unclarity in types
 def get_full_link_points_gpu(joints: RobotJointPositions, n: int = 5) :
     start = joints[:-1]  # (5, 3)
     end = joints[1:]     # (5, 3)
@@ -215,7 +217,7 @@ def extract_links_gpu(pose: HumanPose) -> List[Link]:
     '''Average of left and right shoulders'''
     bc: Position = (pose[9] + pose[10]) / 2
     '''Average of left and right hips'''
-    rad: float = cp.maximum(cp.linalg.norm(pose[2] - pose[3]), cp.linalg.norm(pose[9] - pose[10])) / 2 #TODO find out what this is for commenting
+    rad: float = cp.maximum(cp.linalg.norm(pose[2] - pose[3]), cp.linalg.norm(pose[9] - pose[10])) / 2
     links.append((tc, bc, rad))
 
     # head
@@ -280,7 +282,6 @@ def arrt(q_start: RobotAnglesVector, q_goal: RobotAnglesVector, n_nodes: int = 1
     start_t = time.time()
     n_explored: int = 0
     n_used: int = 0
-        
 
     start_tree: List[RRTNode] = [RRTNode(q_start)]
     goal_tree: List[RRTNode] = [RRTNode(q_goal)]
@@ -292,7 +293,6 @@ def arrt(q_start: RobotAnglesVector, q_goal: RobotAnglesVector, n_nodes: int = 1
         closest: RRTNode = min(start_tree, key=lambda n: cp.linalg.norm((q_rand - n.q + cp.pi) % (2 * cp.pi) - cp.pi))
         q_new: RobotAnglesVector = steer(closest.q, q_rand)
         
-
         if APF_gpu(q_new, body_links) > apf_th:
             continue
 
