@@ -31,6 +31,8 @@ Link: TypeAlias = Tuple[Position, Position, float]
 # Global vars
 destination: RobotAnglesVector = None
 '''Current robot destination as read from /joint_destination'''
+destination_outdated: bool = False
+'''Flag indicating if the destination has been updated'''
 pose_seq: HumanPoseSequence = None
 '''Current human pose sequence as read from /joint_array'''
 body_links: List[Link] = []
@@ -39,7 +41,7 @@ robot_joint_angles: RobotAnglesVector = cp.zeros(6)
 """Robot joint positions as in the angle it is currently in as a cupy array of shape (6,)"""
 
 published: RobotAnglesVector = None
-apf_th: float = 20.
+apf_th: float = 40.
 '''Threshold for the APF value to trigger replanning. Adjust based on environment and robot configuration.'''
 
 dh_params = cp.array([
@@ -77,14 +79,15 @@ class DestinationReader(Node):
         super().__init__('destination_reader')
         self.subscription = self.create_subscription(
             JointTrajectoryPoint,
-            '/joint_destination',
+            '/goal_pose',
             self.destination_callback,
             10)
 
     def destination_callback(self, msg) -> None:
-        global destination
+        global destination, destination_outdated
         self.get_logger().info("got new goal")
         destination = cp.array(msg.positions)
+        destination_outdated = True
 
 class PoseListener(Node):
     def __init__(self) -> None:
@@ -155,7 +158,8 @@ class UR16TrajectoryPublisher(Node):
             while apf < apf_th and (temp < len(path) and temp - step < look_ahead_steps):
                 apf = max(apf, APF_gpu(path[temp], body_links))
                 temp += 1
-                
+            
+            # Replan if APF threshold exceeded
             if apf > apf_th:
                 self.send_trajectory(robot_joint_angles) # Stop movement
                 path = arrt(robot_joint_angles, destination, 200)
@@ -164,13 +168,15 @@ class UR16TrajectoryPublisher(Node):
                 step = 2
                 continue
 
-            dist = cp.linalg.norm(((robot_joint_angles - published + cp.pi) % (2 * cp.pi)) - cp.pi)
-            if dist < 0.1 and step < len(path):
+            dist_from_published = cp.linalg.norm(((robot_joint_angles - published + cp.pi) % (2 * cp.pi)) - cp.pi)
+            # Move to next point if close enough to last published point
+            if dist_from_published < 0.1 and step < len(path):
                 next_pos = path[step]
                 self.send_trajectory(next_pos)
                 step += 1
 
-            if step >= len(path) and cp.linalg.norm(((robot_joint_angles - destination + cp.pi) % (2 * cp.pi)) - cp.pi) < 0.1:
+            dist = cp.linalg.norm(((robot_joint_angles - destination + cp.pi) % (2 * cp.pi)) - cp.pi)
+            if step >= len(path) and dist < 0.1:
                 path = arrt(robot_joint_angles, destination, 200)
                 self.get_logger().info(f"New phase planned path length: {len(path)}")
                 self.send_trajectory(path[1])
