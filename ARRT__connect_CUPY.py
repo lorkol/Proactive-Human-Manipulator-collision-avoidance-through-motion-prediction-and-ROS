@@ -18,6 +18,7 @@ import time
 import threading
 
 # Type Aliasing
+#Holonomic
 RobotAnglesVector: TypeAlias = Annotated[NDArray[cp.float64], cp.ndarray]
 """Shape : (6,) representing the 6 joint angles of the robot"""
 RobotJointPositions: TypeAlias = Annotated[NDArray[cp.float64], cp.ndarray]
@@ -30,6 +31,45 @@ Position: TypeAlias = Annotated[NDArray[cp.float64], cp.ndarray]
 '''Shape : (3,) representing a 3D position vector'''
 Link: TypeAlias = Tuple[Position, Position, float]
 '''A body link represented by two end positions and a radius'''
+
+#Kinodynamic
+class RobotState:
+    def __init__(self, angles: RobotAnglesVector, velocities: RobotAnglesVector) -> None:
+        self.theta1: float = angles[0]
+        '''the angle of joint 1'''
+        self.theta2: float = angles[1]
+        '''the angle of joint 2'''
+        self.theta3: float = angles[2]
+        '''the angle of joint 3'''
+        self.theta4: float = angles[3]
+        '''the angle of joint 4'''
+        self.theta5: float = angles[4]
+        '''the angle of joint 5'''
+        self.theta6: float = angles[5]
+        '''the angle of joint 6'''
+        self.w1: float = velocities[0]
+        '''the velocity of joint 1'''
+        self.w2: float = velocities[1]
+        '''the velocity of joint 2'''
+        self.w3: float = velocities[2]
+        '''the velocity of joint 3'''
+        self.w4: float = velocities[3]
+        '''the velocity of joint 4'''
+        self.w5: float = velocities[4]
+        '''the velocity of joint 5'''
+        self.w6: float = velocities[5]
+        '''the velocity of joint 6'''
+    def angles_to_vector(self) -> RobotAnglesVector:
+        return cp.array([self.theta1, self.theta2, self.theta3, self.theta4, self.theta5, self.theta6])
+    
+    def velocities_to_vector(self) -> RobotAnglesVector:
+        return cp.array([self.w1, self.w2, self.w3, self.w4, self.w5, self.w6])
+    
+    def to_vector(self) -> Tuple[RobotAnglesVector, RobotAnglesVector]:
+        return self.angles_to_vector(), self.velocities_to_vector()
+    
+ControlInput: TypeAlias = Annotated[NDArray[cp.float64], cp.ndarray] 
+'''A control input is represented as a vector of joint angle accelerations'''
 
 # Global vars
 destination: RobotAnglesVector = None
@@ -289,24 +329,21 @@ def APF_gpu(q: RobotAnglesVector, links: List[Link]) -> float:
 
 # -------------------------RRT Implementation-------------------------
 class RRTNode:
-    def __init__(self, q: RobotAnglesVector) -> None:
-        self.q: RobotAnglesVector = q
-        self.parent: 'RRTNode' = None
-        self.cost: float = 0.
+    def __init__(self, q: RobotState, time_stamp: int) -> None:
+        self.robot_state: RobotState = q
+        self.parent: 'RRTNode' = None # Parent node in the RRT
+        self.cost: int = time_stamp # time_stamp represents the time step at which this node is reached and is thereby the cost
 
-def steer(q1: RobotAnglesVector, q2: RobotAnglesVector, step: float = 0.2) -> RobotAnglesVector:
-    d = (q2 - q1 + cp.pi) % (2 * cp.pi) - cp.pi
-    norm = cp.linalg.norm(d)
-    return q1 + d * (step / norm) if norm > 1e-6 else q1
+def steer(q1: RobotState, u: ControlInput, step: float = 0.2) -> RobotAnglesVector:
+    raise NotImplementedError("Steer function for kinodynamic RRT is not implemented yet.")
 
 # ----------------- A-RRT* Planning Function -----------------
-def arrt(q_start: RobotAnglesVector, q_goal: RobotAnglesVector, n_nodes: int = 100) -> List[RobotAnglesVector]:
+def arrt(q_start: RobotState, q_goal: RobotState, n_nodes: int = 100):
     start_t = time.time()
     n_explored: int = 0
     n_used: int = 0
 
-    start_tree: List[RRTNode] = [RRTNode(q_start)]
-    goal_tree: List[RRTNode] = [RRTNode(q_goal)]
+    start_tree: List[RRTNode] = [RRTNode(q_start, 0)]
     itr: int = 0
     while itr < n_nodes:
         q_rand: RobotAnglesVector = q_goal if cp.random.rand() < 0.1 else (cp.random.normal(loc=q_goal, scale=1))
