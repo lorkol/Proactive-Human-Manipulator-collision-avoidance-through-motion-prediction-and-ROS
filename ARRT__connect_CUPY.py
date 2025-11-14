@@ -8,6 +8,9 @@ from rclpy.executors import MultiThreadedExecutor
 from sensor_msgs.msg import JointState
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from builtin_interfaces.msg import Duration
+from visualization_msgs.msg import Marker, MarkerArray
+from geometry_msgs.msg import Point
+from std_msgs.msg import ColorRGBA
 from sklearn.neighbors import KDTree
 import cupy as cp
 from cupy.typing import NDArray
@@ -41,7 +44,7 @@ robot_joint_angles: RobotAnglesVector = cp.zeros(6)
 """Robot joint positions as in the angle it is currently in as a cupy array of shape (6,)"""
 
 published: RobotAnglesVector = None
-apf_th: float = 40.
+apf_th: float = 20.
 '''Threshold for the APF value to trigger replanning. Adjust based on environment and robot configuration.'''
 
 dh_params = cp.array([
@@ -172,8 +175,9 @@ class UR16TrajectoryPublisher(Node):
             # Replan if APF threshold exceeded
             if apf > apf_th:
                 self.send_trajectory(robot_joint_angles) # Stop movement
+                self.get_logger().warning(f"Replanning path due to apf threshold length: {len(path)}")
                 path = arrt(robot_joint_angles, destination, 200)
-                self.get_logger().warning(f"Replanned path due to apf threshold length: {len(path)}")
+                self.get_logger().info(f"Replanned path due to apf threshold length: {len(path)}")
                 self.send_trajectory(path[1])
                 step = 2
                 continue
@@ -264,7 +268,7 @@ def capsule_contrib_batch(points: RobotJointPositions, links: List[Link], dth=50
     for p1, p2, r in links:
         d_vec = p2 - p1
         d_norm: float = cp.linalg.norm(d_vec)
-        if d_norm<1e-6:
+        if d_norm < 1e-6:
             continue
         v = points - p1 # TODO the types mismatch. points is 6x3, but p1 is 3x1
         axial: float = cp.dot(v, d_vec) / d_norm
@@ -371,12 +375,140 @@ def arrt(q_start: RobotAnglesVector, q_goal: RobotAnglesVector, n_nodes: int = 1
     return path
 
 
+class APFVisualizationPublisher(Node):
+    """Publishes arrow markers showing APF forces from robot links to human body parts."""
+    
+    def __init__(self) -> None:
+        super().__init__('apf_visualization_publisher')
+        self.publisher_ = self.create_publisher(MarkerArray, '/apf_forces', 10)
+        self.timer = self.create_timer(0.05, self.publish_apf_markers)  # 20Hz update rate
+        
+    def publish_apf_markers(self) -> None:
+        """Create and publish arrow markers representing APF forces."""
+        global robot_joint_angles, body_links
+        
+        if len(body_links) == 0:
+            self.get_logger().debug("No body links available")
+            return
+            
+        marker_array = MarkerArray()
+        marker_id = 0
+        
+        # Get robot joint positions (centers of links, in mm)
+        robot_joint_positions = dh_transform_batch(robot_joint_angles)  # (6, 3) in mm
+        
+        # Create robot link centers (midpoints between consecutive joints)
+        robot_link_centers = []
+        for i in range(len(robot_joint_positions) - 1):
+            link_center = (robot_joint_positions[i] + robot_joint_positions[i+1]) / 2.0
+            robot_link_centers.append(link_center / 1000.0)  # Convert to meters
+        
+        # For each human body link
+        for link_start, link_end, radius in body_links:
+            # Find closest robot link center to this human link
+            min_dist = float('inf')
+            closest_robot_link_center = None
+            closest_human_pt = None
+            
+            for robot_link_center in robot_link_centers:
+                # Distance from robot link center to human link capsule
+                link_vec = link_end - link_start
+                link_len = float(cp.linalg.norm(link_vec))
+                
+                if link_len < 1e-6:
+                    projection = link_start
+                    dist = float(cp.linalg.norm(robot_link_center - link_start)) - float(radius)
+                else:
+                    # Project robot point onto human link
+                    v = robot_link_center - link_start
+                    t = float(cp.dot(v, link_vec)) / link_len
+                    t = max(0.0, min(t, link_len))
+                    projection = link_start + (t / link_len) * link_vec
+                    dist = float(cp.linalg.norm(robot_link_center - projection)) - float(radius)
+                
+                if dist < min_dist:
+                    min_dist = dist
+                    closest_robot_link_center = robot_link_center
+                    closest_human_pt = projection
+            
+            # Calculate APF magnitude for this link
+            if min_dist <= 0:
+                apf_magnitude = 1000.0  # Collision
+            elif min_dist > 2.0:  # Beyond threshold (increased from 1.0 to 2.0m)
+                continue  # Skip this link
+            else:
+                # Exponential repulsion
+                safe_d = max(min_dist, 0.01)
+                apf_magnitude = 80.0 * float(cp.exp(-safe_d / 0.1))
+            
+            # Create arrow marker from robot point to human surface
+            marker = Marker()
+            marker.header.frame_id = "base"  # Use same frame as human markers
+            marker.header.stamp = self.get_clock().now().to_msg()
+            marker.ns = "apf_forces"
+            marker.id = marker_id
+            marker.type = Marker.ARROW
+            marker.action = Marker.ADD
+            
+            # Start point (robot link center) - already in meters
+            start_pt = Point()
+            start_pt.x = float(closest_robot_link_center[0])
+            start_pt.y = float(closest_robot_link_center[1])
+            start_pt.z = float(closest_robot_link_center[2])
+            
+            # End point (closest point on human capsule surface)
+            end_pt = Point()
+            end_pt.x = float(closest_human_pt[0])
+            end_pt.y = float(closest_human_pt[1])
+            end_pt.z = float(closest_human_pt[2])
+            
+            marker.points = [start_pt, end_pt]
+            
+            # Arrow size
+            marker.scale.x = 0.01  # Shaft diameter
+            marker.scale.y = 0.02  # Head diameter
+            marker.scale.z = 0.03  # Head length
+            
+            # Color based on APF magnitude relative to threshold
+            color = ColorRGBA()
+            if apf_magnitude > apf_th:
+                color.r, color.g, color.b = 1.0, 0.0, 0.0  # Red - exceeds threshold
+            elif apf_magnitude > apf_th * 0.5:
+                color.r, color.g, color.b = 1.0, 0.5, 0.0  # Orange - high (50-100% of threshold)
+            elif apf_magnitude > apf_th * 0.25:
+                color.r, color.g, color.b = 1.0, 1.0, 0.0  # Yellow - medium (25-50% of threshold)
+            else:
+                color.r, color.g, color.b = 0.0, 1.0, 0.0  # Green - low (< 25% of threshold)
+            color.a = 0.8
+            marker.color = color
+            
+            # Set lifetime to 0 for persistent markers (they'll be updated by the timer)
+            marker.lifetime.sec = 0
+            marker.lifetime.nanosec = 0
+            
+            marker_array.markers.append(marker)
+            marker_id += 1
+        
+        # Delete old markers if we have fewer now
+        if marker_id < 20:  # Assuming max 20 markers
+            for i in range(marker_id, 20):
+                delete_marker = Marker()
+                delete_marker.header.frame_id = "base"
+                delete_marker.ns = "apf_forces"
+                delete_marker.id = i
+                delete_marker.action = Marker.DELETE
+                marker_array.markers.append(delete_marker)
+        
+        self.publisher_.publish(marker_array)
+
+
 def main(args=None):
     rclpy.init(args=args)
     pose_listener = PoseListener()
     joint_reader = JointStateReader()
     destination_reader = DestinationReader()
     trajectory_publisher = UR16TrajectoryPublisher()
+    apf_viz_publisher = APFVisualizationPublisher()
 
     executor = MultiThreadedExecutor()
     while not pose_listener.ready and rclpy.ok():
@@ -386,6 +518,7 @@ def main(args=None):
     executor.add_node(joint_reader)
     executor.add_node(destination_reader)
     executor.add_node(trajectory_publisher)
+    executor.add_node(apf_viz_publisher)
 
     try:
         executor.spin()
@@ -394,6 +527,7 @@ def main(args=None):
         destination_reader.destroy_node()
         pose_listener.destroy_node()
         trajectory_publisher.destroy_node()
+        apf_viz_publisher.destroy_node()
         rclpy.shutdown()
 
 
