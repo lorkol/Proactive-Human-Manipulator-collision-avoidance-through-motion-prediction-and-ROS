@@ -17,7 +17,7 @@ from cupy.typing import NDArray
 import time
 import threading
 
-# Type Aliasing
+#---------------------------------------------------------- Type Aliasing
 #Holonomic
 RobotAnglesVector: TypeAlias = Annotated[NDArray[cp.float64], cp.ndarray]
 """Shape : (6,) representing the 6 joint angles of the robot"""
@@ -32,9 +32,22 @@ Position: TypeAlias = Annotated[NDArray[cp.float64], cp.ndarray]
 Link: TypeAlias = Tuple[Position, Position, float]
 '''A body link represented by two end positions and a radius'''
 
-#Kinodynamic
+# Kinodynamic
+RobotVelocitiesVector: TypeAlias = Annotated[NDArray[cp.float64], cp.ndarray]
+"""Shape : (6,) representing the 6 joint angle velocities of the robot"""
+
 class RobotState:
-    def __init__(self, angles: RobotAnglesVector, velocities: RobotAnglesVector) -> None:
+    #Static fields (class variables)
+    DOF: int = 6
+    '''Degrees of freedom'''
+    MAX_POSITIONS: RobotAnglesVector = cp.array([6.28, 6.28, 3.14, 6.28, 6.28, 6.28])
+    '''Max angular positions in rad according to the official UR16e documentation'''
+    MAX_VELOCITIES: RobotVelocitiesVector = cp.array([3.14, 3.14, 3.14, 3.14, 3.14, 3.14])
+    '''Max angular velocities in rad/s according to the official UR16e documentation'''
+    MAX_ACCELERATIONS: RobotAnglesVector = cp.array([6.28, 6.28, 6.28, 6.28, 6.28, 6.28])
+    '''Example: max angular accelerations in rad/s^2 according to the official UR16e documentation'''
+
+    def __init__(self, angles: RobotAnglesVector, velocities: RobotVelocitiesVector) -> None:
         self.theta1: float = angles[0]
         '''the angle of joint 1'''
         self.theta2: float = angles[1]
@@ -59,19 +72,114 @@ class RobotState:
         '''the velocity of joint 5'''
         self.w6: float = velocities[5]
         '''the velocity of joint 6'''
+        
+    ############Methods to convert to vectors
     def angles_to_vector(self) -> RobotAnglesVector:
+        """returns the joint angles as a cupy array of shape (6,)"""
         return cp.array([self.theta1, self.theta2, self.theta3, self.theta4, self.theta5, self.theta6])
     
-    def velocities_to_vector(self) -> RobotAnglesVector:
+    def velocities_to_vector(self) -> RobotVelocitiesVector:
+        """returns the joint velocities as a cupy array of shape (6,)"""
         return cp.array([self.w1, self.w2, self.w3, self.w4, self.w5, self.w6])
     
-    def to_vector(self) -> Tuple[RobotAnglesVector, RobotAnglesVector]:
+    def to_vector(self) -> Tuple[RobotAnglesVector, RobotVelocitiesVector]:
+        """returns the joint angles and velocities as two cupy arrays of shape (6,)"""
         return self.angles_to_vector(), self.velocities_to_vector()
-    
+
+
 ControlInput: TypeAlias = Annotated[NDArray[cp.float64], cp.ndarray] 
 '''A control input is represented as a vector of joint angle accelerations'''
 
-# Global vars
+#------------------------------------------------------- RRT Functions
+
+class KinodynamicRRTNode:
+    """A node in the kinodynamic RRT. Holds the robot state, parent node, and cost to reach this node."""
+    def __init__(self, state: RobotState, time_stamp: int) -> None:
+        self.robot_state: RobotState = state
+        '''The robot state at this node'''
+        self.parent: 'KinodynamicRRTNode' = None
+        '''Parent node in the RRT'''
+        self.cost: int = time_stamp
+        '''time_stamp represents the time step at which this node is reached and is thereby the cost'''
+        
+    def get_parent(self) -> 'KinodynamicRRTNode':
+        """Returns the parent node."""
+        return self.parent
+    
+    def get_state(self) -> RobotState:
+        """Returns the robot state at this node."""
+        return self.robot_state
+    
+    def get_cost(self) -> int:
+        """Returns the cost to reach this node."""
+        return self.cost
+    
+    def set_cost(self) -> None:
+        """Automatically sets the cost based on the parent's cost."""
+        if self.parent is not None:
+            self.cost = self.parent.get_cost() + 1
+        else:
+            self.cost = 0
+            
+    def set_cost(self, cost: int) -> None:
+        """Sets the cost to reach this node."""
+        self.cost = cost
+
+    def set_parent(self, parent: 'KinodynamicRRTNode') -> None:
+        """Sets the parent node."""
+        self.parent = parent
+
+RRT_TIMESTEP: float = 0.2
+"""Time step for each RRT expansion in seconds"""
+
+def sample_control() -> ControlInput:
+    """Samples a random control input within the robot's acceleration limits."""
+    # Return shape (6,) with per-joint limits: [-MAX_ACCEL[i], +MAX_ACCEL[i]]
+    return RobotState.MAX_ACCELERATIONS * cp.random.uniform(-1.0, 1.0, size=(RobotState.DOF,), dtype=cp.float64)
+
+def steer(initial_state: RobotState, u: ControlInput) -> Tuple[RobotState, ControlInput]:
+    """Steers the robot from the initial state using control input u over a fixed time step.\n
+    Returns the new robot state and the actual control inputs applied (which may be clamped to respect velocity/position limits)."""
+    new_state: RobotState = RobotState(initial_state.angles_to_vector().copy(),
+                                       initial_state.velocities_to_vector().copy())
+    actual_controls: ControlInput = u.copy()
+    for i in range(RobotState.DOF):
+        # Update velocity with acceleration
+        v0 = initial_state.velocities_to_vector()[i]
+        s0 = initial_state.angles_to_vector()[i]
+        new_velocity = v0 + u[i] * RRT_TIMESTEP
+
+        # Check velocity limits, and clamp if necessary
+        if new_velocity > RobotState.MAX_VELOCITIES[i] or new_velocity < -RobotState.MAX_VELOCITIES[i]:
+            new_velocity = cp.sign(new_velocity) * RobotState.MAX_VELOCITIES[i]
+            u[i] = (new_velocity - initial_state.velocities_to_vector()[i]) / RRT_TIMESTEP
+
+        # Predict position using kinematics: s = s0 + v0*RRT_TIMESTEP + 0.5*a*RRT_TIMESTEP^2
+        new_angle = s0 + v0 * RRT_TIMESTEP + 0.5 * u[i] * RRT_TIMESTEP * RRT_TIMESTEP
+        if new_angle > RobotState.MAX_POSITIONS[i] or new_angle < -RobotState.MAX_POSITIONS[i]:
+            # Choose the boundary in the direction of motion and compute the required velocity
+            bound = cp.sign(new_velocity) * RobotState.MAX_POSITIONS[i]
+            new_velocity = (2.0 * (bound - s0) / RRT_TIMESTEP) - v0
+            u[i] = (new_velocity - v0) / RRT_TIMESTEP
+            new_angle = s0 + v0 * RRT_TIMESTEP + 0.5 * u[i] * RRT_TIMESTEP * RRT_TIMESTEP
+        
+        # Update the state
+        new_state.angles_to_vector()[i] = new_angle
+        new_state.velocities_to_vector()[i] = new_velocity
+
+    return new_state, actual_controls
+
+class KRRT_Star_Calculator:
+    """Kinodynamic RRT* calculations implementation."""
+    def __init__(self, initial_node: KinodynamicRRTNode, goal_node: KinodynamicRRTNode) -> None:
+        self.start_node: KinodynamicRRTNode = initial_node
+        """The start node of the RRT."""
+        self.nodes: List[KinodynamicRRTNode] = [self.start_node]
+        """The list of nodes in the RRT."""
+        self.goal_node: KinodynamicRRTNode = goal_node
+        """The goal node of the RRT."""
+
+#--------------------------------------------------------- Global vars
 destination: RobotAnglesVector = None
 '''Current robot destination as read from /joint_destination'''
 destination_outdated: bool = False
@@ -88,14 +196,15 @@ apf_th: float = 20.
 '''Threshold for the APF value to trigger replanning. Adjust based on environment and robot configuration.'''
 
 dh_params = cp.array([
-    [0,       0,        0.1807,   cp.pi/2],
-    [0,  -0.4784,       0,        0],
-    [0,  -0.36,         0,        0],
-    [0,       0,        0.17415,  cp.pi/2],
-    [0,       0,        0.11985, -cp.pi/2],
-    [0,       0,        0.11655,  0]
-])
+                    [0,       0,        0.1807,   cp.pi/2],
+                    [0,  -0.4784,       0,        0],
+                    [0,  -0.36,         0,        0],
+                    [0,       0,        0.17415,  cp.pi/2],
+                    [0,       0,        0.11985, -cp.pi/2],
+                    [0,       0,        0.11655,  0]
+                    ])
 
+######### ROS2 Nodes #########
 
 class JointStateReader(Node):
     """Regarding the ROBOT joint positions."""
@@ -148,7 +257,6 @@ class PoseListener(Node):
         self.ready: bool = True
         pose_seq = cp.array(msg.data).reshape((1, 15, 3))
         body_links = extract_links_gpu(pose_seq[0])
-
 
 class UR16TrajectoryPublisher(Node):
     def __init__(self) -> None:
@@ -327,15 +435,6 @@ def APF_gpu(q: RobotAnglesVector, links: List[Link]) -> float:
     # self.get_logger().info(f"APF computation time: {time.time()-t1:.6f} seconds")
     return ccb
 
-# -------------------------RRT Implementation-------------------------
-class RRTNode:
-    def __init__(self, q: RobotState, time_stamp: int) -> None:
-        self.robot_state: RobotState = q
-        self.parent: 'RRTNode' = None # Parent node in the RRT
-        self.cost: int = time_stamp # time_stamp represents the time step at which this node is reached and is thereby the cost
-
-def steer(q1: RobotState, u: ControlInput, step: float = 0.2) -> RobotAnglesVector:
-    raise NotImplementedError("Steer function for kinodynamic RRT is not implemented yet.")
 
 # ----------------- A-RRT* Planning Function -----------------
 def arrt(q_start: RobotState, q_goal: RobotState, n_nodes: int = 100):
