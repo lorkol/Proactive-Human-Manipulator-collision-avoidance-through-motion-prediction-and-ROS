@@ -1,6 +1,5 @@
 import cupy as cp
 from cupyx.scipy.spatial import KDTree
-from cupy.typing import NDArray
 from typing import List, Tuple
 from classes_and_types import *
 
@@ -207,12 +206,6 @@ class KRRT_Star_Calculator:
         # States
         start_state: RobotState = from_node.get_state()
         end_state: RobotState = to_node.get_state()
-        end_parent_state: RobotState = to_node.get_parent().get_state()
-        # Costs
-        start_state_cost: float = from_node.get_cost()
-        end_state_cost: float = to_node.get_cost()
-        start_parent_cost: float = from_node.get_parent().get_cost()
-        end_parent_cost: float = to_node.get_parent().get_cost()
             
         state_diffs: RobotAnglesVector = end_state.angles_to_vector() - start_state.angles_to_vector()
         start_vel: RobotVelocitiesVector = start_state.velocities_to_vector()

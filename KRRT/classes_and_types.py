@@ -1,7 +1,6 @@
 
-from typing import Annotated, Dict, List, TypeAlias, Tuple
+from typing import Annotated, TypeAlias, Tuple
 import cupy as cp
-from cupyx.scipy.spatial import KDTree
 from cupy.typing import NDArray
 
 #---------------------------------------------------------- Type Aliasing
