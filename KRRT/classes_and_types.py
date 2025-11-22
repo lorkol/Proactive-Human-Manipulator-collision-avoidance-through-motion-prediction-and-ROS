@@ -9,10 +9,6 @@ RobotAnglesVector: TypeAlias = Annotated[NDArray[cp.float64], cp.ndarray]
 '''Shape : (6,) representing the 6 joint angles of the robot'''
 RobotJointPositions: TypeAlias = Annotated[NDArray[cp.float64], cp.ndarray]
 '''Shape : (6, 3) representing the x,y,z positions of each of the 6 robot joints'''
-HumanPoseSequence: TypeAlias = Annotated[NDArray[cp.float64], cp.ndarray]
-'''Shape : (N, 15, 3) where N is the number of time steps - Currently 1, each pose has 15 joints with (x,y,z) coordinates'''
-HumanPose: TypeAlias = Annotated[NDArray[cp.float64], cp.ndarray]
-'''Shape : (15, 3) human pose in a single time step each pose has 15 joints with (x,y,z) coordinates'''
 Position: TypeAlias = Annotated[NDArray[cp.float64], cp.ndarray]
 '''Shape : (3,) representing a 3D position vector'''
 Link: TypeAlias = Tuple[Position, Position, float]

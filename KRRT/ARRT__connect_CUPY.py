@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from typing import Annotated, Dict, List, TypeAlias, Tuple
+from typing import Dict, List, Tuple
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray
@@ -15,6 +15,11 @@ import time
 import threading
 
 from classes_and_types import *
+
+HumanPoseSequence: TypeAlias = Annotated[NDArray[cp.float64], cp.ndarray]
+'''Shape : (N, 15, 3) where N is the number of time steps - Currently 1, each pose has 15 joints with (x,y,z) coordinates'''
+HumanPose: TypeAlias = Annotated[NDArray[cp.float64], cp.ndarray]
+'''Shape : (15, 3) human pose in a single time step each pose has 15 joints with (x,y,z) coordinates'''
 
 #--------------------------------------------------------- Global vars
 destination: RobotAnglesVector = None

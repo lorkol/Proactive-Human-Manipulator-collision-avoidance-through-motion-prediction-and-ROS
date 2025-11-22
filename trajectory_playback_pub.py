@@ -111,7 +111,7 @@ class TrajectoryPlaybackPublisher(Node):
         # Apply position offset (in meters)
         joint_array_m += self.offset_m
 
-        # TODO Send the markers N timesteps late, to simulate this being "predictive"
+        # TODO: Send the markers N timesteps late, to simulate this being "predictive"
         msg = Float32MultiArray()
         msg.data = joint_array_m.flatten().tolist()
         self.array_publisher.publish(msg)
