@@ -69,3 +69,47 @@ The system integrates **3D skeletal pose estimation**, **neural motion predictio
 All scenarios maintained safety margins and successful dynamic replanning.
 
 
+## Repository Structure (Planning Modules)
+
+This codebase now separates experimental kinodynamic planning components for clarity and benchmarking:
+
+- `comparison_2d/` – Scripts to compare control-sampling RRT vs steering-based RRT on 2D double integrator (timing, path length, node counts).
+- `steering_components/` – Analytical and numerical steering modules (bang-bang solver, SciPy BVP example) and steering-enabled RRT variants.
+- `six_dof/` – 6DoF (position + orientation + velocities) kinodynamic planning with SST and comparison utilities (RRT vs SST quality over time).
+- `legacy/` – Previous KRRT (RRT* style) prototype kept for reference; not used in current benchmarks.
+- Root scripts – Original baseline (`ompl_kinodynamic_rrt_star_2d.py`) and integration utilities for the broader collision avoidance system.
+
+### Running Quick Benchmarks
+
+1. 2D Control-Sampling RRT vs Steering:
+	`python comparison_2d/compare_rrt_methods.py`
+
+2. Multi-trial statistics (aggregated timing/path metrics):
+	`python comparison_2d/quick_comparison.py`
+
+3. Steering-based planner alone:
+	`python steering_components/ompl_kinodynamic_rrt_steering.py`
+
+4. 6DoF SST smoke test:
+	`python six_dof/quick_sst_test.py`
+
+5. RRT vs SST progressive improvement (solution refinement over time):
+	`python six_dof/compare_rrt_sst.py`
+
+### Environment Notes
+
+- Requires OMPL Python bindings (`ompl`), CuPy (`cupy`), SciPy (`scipy`).
+- GPU acceleration (CuPy) is optional but recommended for large node counts.
+- If OMPL or CuPy are missing you will see import errors—install and re-run.
+
+### Next Improvements (Roadmap)
+
+- Unify shared kinematic limits/configs into a common module.
+- Add obstacle and collision checking hooks.
+- Replace "_rrt_star" naming in baseline script if rewiring is not implemented.
+- Extend steering solver to full 6DoF subset (translational first, angular second).
+
+---
+For questions on structure or extending planners, see inline docstrings or open an issue.
+
+
